@@ -6,7 +6,7 @@ Flutter + Firebase school management app.
 - Email/password registration and login with Firebase email verification and password-reset email.
 - Role-based registration application for student, teacher, or parent with profile fields and mandatory profile photo upload to Firebase Storage.
 - Admin approval queue showing applicant profile information.
-- Admin approval issues a unique year-based Teacher ID (`TCH-YYYY-0001`) or Student/Admission ID (`STU-YYYY-0001`) through a Firestore transaction and counter document.
+- Admin manually enters Student ID and Admission Number as separate values, or a Teacher ID. Approval rejects invalid/duplicate identifiers using an admin-only ID registry and creates/updates the linked student or teacher record. IDs are not auto-generated.
 - Profile / digital ID card view in the app.
 - Functional Firestore-backed classes, fees, exams/results, homework, and announcements list/create screens (exact access depends on deployed rules and user role).
 - Proposed Firestore and Storage security rules are included locally.
@@ -30,4 +30,4 @@ Flutter + Firebase school management app.
 ## One-pass local build
 Run `bash schoolpro_build_verify.sh` from the project folder in Termux. It creates a backup, checks/fetches Firebase Android configuration, runs `flutter pub get`, `flutter analyze`, and builds a debug APK in one pass. It does not deploy Firebase rules or Hosting.
 
-See `CHANGELOG_SCHOOLPRO_UPDATE.md` for what is included and what remains unverified. This package must not be treated as production-ready until the outstanding authentication, push-notification, role-data isolation and runtime-test items are completed.
+See `CHANGELOG_SCHOOLPRO_UPDATE.md` for the changes and remaining limitations. Run `bash schoolpro_build_verify.sh` for local static checks and a debug APK build; this script never deploys Firebase rules or pushes to GitHub. This package must not be treated as production-ready until the outstanding authentication, push-notification, role-data isolation and runtime-test items are completed.

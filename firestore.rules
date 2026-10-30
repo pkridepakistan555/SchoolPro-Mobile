@@ -17,7 +17,7 @@ service cloud.firestore {
         && request.resource.data.keys().hasAll(['email','name','phone','requestedRole','role','approvalStatus','photoUrl','createdAt'])
         && request.resource.data.keys().hasOnly([
           'email','name','phone','guardianName','address','educationOrClass',
-          'requestedRole','role','approvalStatus','photoUrl','createdAt','profileComplete'
+          'requestedRole','role','approvalStatus','photoUrl','documentUrls','createdAt','profileComplete'
         ])
         && request.resource.data.email == request.auth.token.email
         && request.resource.data.role == 'pending'
@@ -26,11 +26,12 @@ service cloud.firestore {
         && request.resource.data.name is string && request.resource.data.name.size() > 1
         && request.resource.data.phone is string && request.resource.data.phone.size() >= 7
         && request.resource.data.photoUrl is string && request.resource.data.photoUrl.size() > 0
+        && (!('documentUrls' in request.resource.data) || request.resource.data.documentUrls is list && request.resource.data.documentUrls.size() <= 8)
         && request.resource.data.createdAt == request.time;
       allow update: if (isAdmin()
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
             'role','approvalStatus','approvedAt','approvedBy','schoolId',
-            'admissionNo','cardIssuedAt','rejectionReason'
+            'studentId','teacherId','className','admissionNo','cardIssuedAt','rejectionReason'
           ])
           && request.resource.data.role in ['student','teacher','parent','rejected']
           && request.resource.data.approvalStatus == (request.resource.data.role == 'rejected' ? 'rejected' : 'approved')
@@ -51,11 +52,17 @@ service cloud.firestore {
       allow read, write: if isAdmin();
     }
 
+    // ID registry prevents two new approvals from claiming the same identifier.
+    match /idRegistry/{identifier} {
+      allow read, write: if isAdmin();
+    }
+
     match /students/{studentId} {
       allow read: if isAdmin() || isStaff() || (signedIn() && resource.data.userId == request.auth.uid);
       allow create: if isAdmin()
-        && request.resource.data.keys().hasAll(['name','admissionNo','className','guardianPhone','createdAt','createdBy'])
+        && request.resource.data.keys().hasAll(['name','studentId','admissionNo','className','guardianPhone','createdAt','createdBy'])
         && request.resource.data.name is string && request.resource.data.name.size() > 0
+        && request.resource.data.studentId is string && request.resource.data.studentId.size() > 0
         && request.resource.data.admissionNo is string && request.resource.data.admissionNo.size() > 0
         && request.resource.data.createdBy == request.auth.uid
         && request.resource.data.createdAt == request.time;
