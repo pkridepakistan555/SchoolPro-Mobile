@@ -1,0 +1,43 @@
+SCHOOLPRO RC7 — DEPLOYMENT / VERIFICATION STATUS
+================================================
+
+Configured Firebase project: school-e8d44
+Region for Cloud Functions: asia-south1
+
+RC7 source includes:
+- Android mobile application and separate Flutter Admin Web application.
+- Firebase Authentication with email verification link, pending registration, Admin approval and server-issued role IDs.
+- Admin-only callable functions for approval/rejection, parent-child linking and teacher leave review.
+- Profile photo and document uploads with Firebase Storage rules and Firestore metadata.
+- Parent multi-child linking (up to 10 students), scoped dashboard queries and in-app notifications.
+- Teacher leave requests/review, teacher attendance workflows and scoped records.
+- Immutable fee payments with sequential receipts, fee structure references and monthly fee period.
+- Report-card generation, parent/student report-card reading, finance/dues and attendance reports, CSV export, browser Print/Save-as-PDF and 80mm receipt print layout.
+- Firestore/Storage rules, indexes, emulator tests and GitHub Actions verification workflow.
+
+Checks run in the authoring environment:
+- node --check functions/index.js — PASS
+- node --check tests/rules.test.js — PASS
+- Firebase/package JSON parsing — PASS
+- pubspec and workflow YAML parsing — PASS
+- Root and Admin Firestore rules are byte-identical — PASS
+
+Not run in this environment:
+- Flutter/Dart analyze, widget tests, Android APK build and Admin Web build.
+- Firebase Emulator rules tests (npm dependencies could not be fully installed before timeout).
+- Live Auth/Firestore/Storage/Functions/Hosting end-to-end tests.
+- Firebase deployment. No live Firestore data or deployed rules have been changed by this package creation.
+
+Important known limitations:
+- Signup sends a Firebase email-verification link, not a numeric email OTP. Numeric email OTP requires a configured email delivery provider and secret credentials.
+- Parent notifications are in-app Firestore notifications; FCM push, SMS and external email notifications are not configured.
+- Monthly dues are calculated only for fee structures explicitly configured with frequency=monthly and payments linked to feeStructureId and YYYY-MM period. Legacy/non-monthly structures require data normalization/configuration.
+- Finance report is capped at 2,000 payments, 2,000 expenses, 3,000 students and 500 fee structures per run; it does not reconcile bank balances.
+- Report-card generation is per student (optional exam filter), not a bulk class-wide publishing job.
+- PDF output uses the browser print dialog (Save as PDF); thermal receipt output uses the 80mm print layout and the printer selected by the Admin.
+- Android APK verification uses debug signing. Play Store release signing requires the owner's private upload key and is not included.
+
+Release state: expanded release candidate, NOT yet 100% verified / production final.
+No Firebase deploy is performed by --check. The --deploy mode deploys Functions, Firestore rules/indexes, Storage rules and Admin Hosting only after every local check passes.
+
+Billing note: Cloud Functions Gen 2 deployment may require the Firebase Blaze billing plan. No billing upgrade or paid resource was enabled by this source-package preparation.

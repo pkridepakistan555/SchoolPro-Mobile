@@ -1,14 +1,12 @@
 plugins {
     id("com.android.application")
-    id("com.google.gms.google-services")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
 }
 
 android {
     namespace = "com.schoolpro.schoolpro"
-    compileSdk = 36
-    buildToolsVersion = "35.0.0"
+    compileSdk = 34
     ndkVersion = flutter.ndkVersion
 
     compileOptions {

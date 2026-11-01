@@ -1,13 +1,18 @@
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
-import 'package:firebase_storage/firebase_storage.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:flutter/material.dart';
+
+import 'admin_modules.dart';
+import 'firebase_options.dart';
+import 'profile_documents_screen.dart';
+import 'teacher_leave_screen.dart';
+import 'admin_workflows_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp();
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   runApp(const SchoolProApp());
 }
 
@@ -102,15 +107,25 @@ class _AuthScreenState extends State<AuthScreen> {
   final formKey = GlobalKey<FormState>();
   final emailController = TextEditingController();
   final passwordController = TextEditingController();
-  final fullNameController = TextEditingController();
+  final nameController = TextEditingController();
   final phoneController = TextEditingController();
-  final guardianController = TextEditingController();
-  final addressController = TextEditingController();
-  final educationController = TextEditingController();
+  final qualificationController = TextEditingController();
+  final subjectController = TextEditingController();
   final classController = TextEditingController();
+  final childAdmissionController = TextEditingController();
+  final existingAdmissionController = TextEditingController();
+  final dobController = TextEditingController();
+  final addressController = TextEditingController();
+  final emergencyNameController = TextEditingController();
+  final emergencyPhoneController = TextEditingController();
+  final guardianNameController = TextEditingController();
+  final guardianPhoneController = TextEditingController();
+  final previousSchoolController = TextEditingController();
+  final experienceController = TextEditingController(text: '0');
+  final relationshipController = TextEditingController();
+  final occupationController = TextEditingController();
+  String gender = 'prefer_not_to_say';
   String requestedRole = 'student';
-  XFile? profileImage;
-  List<XFile> supportingDocuments = [];
   bool registering = false;
   bool busy = false;
   bool hidePassword = true;
@@ -122,45 +137,41 @@ class _AuthScreenState extends State<AuthScreen> {
   void dispose() {
     emailController.dispose();
     passwordController.dispose();
-    fullNameController.dispose();
+    nameController.dispose();
     phoneController.dispose();
-    guardianController.dispose();
-    addressController.dispose();
-    educationController.dispose();
+    qualificationController.dispose();
+    subjectController.dispose();
     classController.dispose();
+    childAdmissionController.dispose(); existingAdmissionController.dispose();
+    dobController.dispose(); addressController.dispose();
+    emergencyNameController.dispose(); emergencyPhoneController.dispose();
+    guardianNameController.dispose(); guardianPhoneController.dispose();
+    previousSchoolController.dispose(); experienceController.dispose();
+    relationshipController.dispose(); occupationController.dispose();
     super.dispose();
-  }
-
-  Future<void> pickSupportingDocuments() async {
-    try {
-      final picked = await ImagePicker().pickMultiImage(
-        imageQuality: 82,
-        maxWidth: 1800,
-      );
-      if (!mounted) return;
-      setState(() {
-        supportingDocuments = picked.take(8).toList();
-        message = picked.length > 8
-            ? t(
-                'Selected first 8 document images (maximum 8).',
-                'پہلی 8 دستاویزی تصاویر منتخب کی گئی ہیں (زیادہ سے زیادہ 8)۔',
-              )
-            : '';
-      });
-    } catch (_) {
-      if (mounted) {
-        setState(
-          () => message = t(
-            'Could not select document images.',
-            'دستاویزات کی تصاویر منتخب نہیں ہو سکیں۔',
-          ),
-        );
-      }
-    }
   }
 
   Future<void> submit() async {
     if (!formKey.currentState!.validate()) return;
+    if (registering) {
+      final dob = DateTime.tryParse(dobController.text.trim());
+      if (dob == null || !RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(dobController.text.trim()) || dob.isAfter(DateTime.now()) || addressController.text.trim().length < 5) {
+        setState(() => message = t('Enter a valid past date of birth and a complete address.', 'درست تاریخِ پیدائش اور مکمل پتہ درج کریں۔'));
+        return;
+      }
+      if (requestedRole == 'student' && (guardianNameController.text.trim().length < 2 || guardianPhoneController.text.trim().isEmpty || classController.text.trim().isEmpty)) {
+        setState(() => message = t('Student registration requires class and guardian name/phone.', 'طالب علم کی درخواست کے لیے جماعت اور سرپرست کا نام/فون ضروری ہے۔'));
+        return;
+      }
+      if (requestedRole == 'teacher' && (qualificationController.text.trim().isEmpty || subjectController.text.trim().isEmpty || int.tryParse(experienceController.text.trim()) == null || int.parse(experienceController.text.trim()) < 0 || int.parse(experienceController.text.trim()) > 60)) {
+        setState(() => message = t('Teacher registration requires qualification, subjects and experience from 0 to 60 years.', 'استاد کی درخواست کے لیے قابلیت، مضامین اور 0 سے 60 سال کا تجربہ درج کریں۔'));
+        return;
+      }
+      if (requestedRole == 'parent' && (childAdmissionController.text.trim().isEmpty || relationshipController.text.trim().isEmpty)) {
+        setState(() => message = t('Parent registration requires the child Admission Number and relationship.', 'والدین کی درخواست کے لیے بچے کا داخلہ نمبر اور رشتہ درج کرنا ضروری ہے۔'));
+        return;
+      }
+    }
 
     setState(() {
       busy = true;
@@ -172,66 +183,41 @@ class _AuthScreenState extends State<AuthScreen> {
       final password = passwordController.text;
 
       if (registering) {
-        if (fullNameController.text.trim().isEmpty ||
-            phoneController.text.trim().isEmpty ||
-            profileImage == null) {
-          setState(
-            () => message = t(
-              'Full name, phone number and profile photo are required for an application.',
-              'درخواست کے لیے مکمل نام، فون نمبر اور پروفائل تصویر ضروری ہیں۔',
-            ),
-          );
-          return;
+        if (nameController.text.trim().length < 2) {
+          throw FirebaseAuthException(code: 'invalid-display-name');
         }
         final result = await FirebaseAuth.instance
             .createUserWithEmailAndPassword(email: email, password: password);
         final user = result.user!;
-        String photoUrl = '';
-        try {
-          final imageRef = FirebaseStorage.instance.ref(
-            'profileApplications/${user.uid}/profile.jpg',
-          );
-          await imageRef.putData(
-            await profileImage!.readAsBytes(),
-            SettableMetadata(contentType: 'image/jpeg'),
-          );
-          photoUrl = await imageRef.getDownloadURL();
-        } catch (uploadError) {
-          await user.delete();
-          rethrow;
-        }
-        final documentUrls = <String>[];
-        for (var i = 0; i < supportingDocuments.length; i++) {
-          final docRef = FirebaseStorage.instance.ref(
-            'profileDocuments/${user.uid}/document_${i + 1}.jpg',
-          );
-          await docRef.putData(
-            await supportingDocuments[i].readAsBytes(),
-            SettableMetadata(contentType: 'image/jpeg'),
-          );
-          documentUrls.add(await docRef.getDownloadURL());
-        }
-        final profile = <String, dynamic>{
+
+        await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
           'email': email,
-          'name': fullNameController.text.trim(),
+          'name': nameController.text.trim(),
           'phone': phoneController.text.trim(),
-          'guardianName': guardianController.text.trim(),
+          'qualification': qualificationController.text.trim(),
+          'subjects': subjectController.text.trim(),
+          'currentClass': classController.text.trim(),
+          'childAdmissionNo': childAdmissionController.text.trim(),
+          'existingAdmissionNo': existingAdmissionController.text.trim(),
+          'dateOfBirth': dobController.text.trim(),
+          'gender': gender,
           'address': addressController.text.trim(),
-          'educationOrClass': requestedRole == 'teacher'
-              ? educationController.text.trim()
-              : classController.text.trim(),
+          'emergencyContactName': emergencyNameController.text.trim(),
+          'emergencyContactPhone': emergencyPhoneController.text.trim(),
+          'guardianName': guardianNameController.text.trim(),
+          'guardianPhone': guardianPhoneController.text.trim(),
+          'previousSchool': previousSchoolController.text.trim(),
+          'experienceYears': int.tryParse(experienceController.text.trim()) ?? 0,
+          'relationshipToStudent': relationshipController.text.trim(),
+          'occupation': occupationController.text.trim(),
           'requestedRole': requestedRole,
           'role': 'pending',
           'approvalStatus': 'pending',
-          'photoUrl': photoUrl,
-          'documentUrls': documentUrls,
+          'profileCompleted': true,
           'createdAt': FieldValue.serverTimestamp(),
-          'profileComplete': true,
-        };
-        await FirebaseFirestore.instance
-            .collection('users')
-            .doc(user.uid)
-            .set(profile);
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+
         await user.sendEmailVerification();
         await FirebaseAuth.instance.signOut();
 
@@ -279,19 +265,6 @@ class _AuthScreenState extends State<AuthScreen> {
     }
   }
 
-  Future<void> pickProfilePhoto() async {
-    try {
-      final picked = await ImagePicker().pickImage(
-        source: ImageSource.gallery,
-        imageQuality: 82,
-        maxWidth: 1200,
-      );
-      if (picked != null && mounted) setState(() => profileImage = picked);
-    } catch (e) {
-      if (mounted) setState(() => message = 'Image selection failed: $e');
-    }
-  }
-
   Future<void> resetPassword() async {
     final email = emailController.text.trim();
     if (!email.contains('@') || !email.contains('.')) {
@@ -336,6 +309,7 @@ class _AuthScreenState extends State<AuthScreen> {
 
   String authError(String code, bool urdu) {
     const en = {
+      'invalid-display-name': 'Enter your full name (at least 2 characters).',
       'invalid-email': 'The email address is invalid.',
       'user-not-found': 'No account found. Please register first.',
       'wrong-password': 'Incorrect email or password.',
@@ -348,6 +322,7 @@ class _AuthScreenState extends State<AuthScreen> {
           'Email/password sign-in is disabled in Firebase.',
     };
     const ur = {
+      'invalid-display-name': 'اپنا مکمل نام درج کریں (کم از کم دو حروف)۔',
       'invalid-email': 'ای میل کا پتہ درست نہیں۔',
       'user-not-found': 'اکاؤنٹ نہیں ملا۔ پہلے رجسٹریشن کریں۔',
       'wrong-password': 'ای میل یا پاس ورڈ غلط ہے۔',
@@ -421,139 +396,91 @@ class _AuthScreenState extends State<AuthScreen> {
                     ),
                     const SizedBox(height: 20),
                     if (registering) ...[
-                      DropdownButtonFormField<String>(
-                        initialValue: requestedRole,
-                        decoration: InputDecoration(
-                          labelText: t('Applying as', 'درخواست کی قسم'),
-                        ),
-                        items: [
-                          DropdownMenuItem(
-                            value: 'student',
-                            child: Text(t('Student', 'طالب علم')),
-                          ),
-                          DropdownMenuItem(
-                            value: 'teacher',
-                            child: Text(t('Teacher', 'استاد')),
-                          ),
-                          DropdownMenuItem(
-                            value: 'parent',
-                            child: Text(t('Parent', 'والدین')),
-                          ),
-                        ],
-                        onChanged: busy
-                            ? null
-                            : (v) => setState(
-                                () => requestedRole = v ?? 'student',
-                              ),
-                      ),
-                      const SizedBox(height: 12),
                       TextFormField(
-                        controller: fullNameController,
+                        controller: nameController,
                         textCapitalization: TextCapitalization.words,
                         decoration: InputDecoration(
-                          labelText: t('Full name *', 'مکمل نام *'),
+                          labelText: t('Full name', 'مکمل نام'),
                           prefixIcon: const Icon(Icons.person_outline),
                         ),
-                        validator: (v) =>
-                            registering && (v == null || v.trim().isEmpty)
-                            ? t(
-                                'Enter your full name.',
-                                'اپنا مکمل نام درج کریں۔',
-                              )
+                        validator: (value) => (value ?? '').trim().length < 2
+                            ? t('Enter your full name.', 'اپنا مکمل نام درج کریں۔')
                             : null,
                       ),
-                      const SizedBox(height: 12),
+                      const SizedBox(height: 16),
                       TextFormField(
                         controller: phoneController,
                         keyboardType: TextInputType.phone,
                         decoration: InputDecoration(
-                          labelText: t('Mobile number *', 'موبائل نمبر *'),
+                          labelText: t('Phone number', 'فون نمبر'),
                           prefixIcon: const Icon(Icons.phone_outlined),
                         ),
-                        validator: (v) =>
-                            registering && (v == null || v.trim().length < 7)
-                            ? t(
-                                'Enter a valid mobile number.',
-                                'درست موبائل نمبر درج کریں۔',
-                              )
-                            : null,
+                      ),
+                      const SizedBox(height: 16),
+                      const SizedBox(height: 12),
+                      TextFormField(controller: dobController, decoration: InputDecoration(labelText: t('Date of birth (YYYY-MM-DD)', 'تاریخِ پیدائش (YYYY-MM-DD)')), validator: (v) => DateTime.tryParse((v ?? '').trim()) == null ? t('Enter date as YYYY-MM-DD.', 'تاریخ YYYY-MM-DD میں درج کریں۔') : null),
+                      const SizedBox(height: 12),
+                      DropdownButtonFormField<String>(
+                        value: gender,
+                        decoration: InputDecoration(labelText: t('Gender', 'جنس')),
+                        items: [
+                          DropdownMenuItem(value: 'male', child: Text(t('Male', 'مرد'))),
+                          DropdownMenuItem(value: 'female', child: Text(t('Female', 'عورت'))),
+                          DropdownMenuItem(value: 'other', child: Text(t('Other', 'دیگر'))),
+                          DropdownMenuItem(value: 'prefer_not_to_say', child: Text(t('Prefer not to say', 'بتانا نہیں چاہتے'))),
+                        ],
+                        onChanged: busy ? null : (v) { if (v != null) setState(() => gender = v); },
                       ),
                       const SizedBox(height: 12),
-                      TextFormField(
-                        controller: guardianController,
+                      TextFormField(controller: addressController, maxLines: 2, decoration: InputDecoration(labelText: t('Residential address', 'رہائشی پتہ'))),
+                      const SizedBox(height: 12),
+                      TextFormField(controller: emergencyNameController, decoration: InputDecoration(labelText: t('Emergency contact name (optional)', 'ہنگامی رابطہ نام (اختیاری)'))),
+                      const SizedBox(height: 12),
+                      TextFormField(controller: emergencyPhoneController, keyboardType: TextInputType.phone, decoration: InputDecoration(labelText: t('Emergency contact phone (optional)', 'ہنگامی رابطہ فون (اختیاری)'))),
+                      const SizedBox(height: 12),
+                      DropdownButtonFormField<String>(
+                        value: requestedRole,
                         decoration: InputDecoration(
-                          labelText: t(
-                            'Parent / guardian name',
-                            'والد / سرپرست کا نام',
-                          ),
+                          labelText: t('Applying as', 'درخواست کا کردار'),
+                          prefixIcon: const Icon(Icons.badge_outlined),
                         ),
+                        items: [
+                          DropdownMenuItem(value: 'student', child: Text(t('Student', 'طالب علم'))),
+                          DropdownMenuItem(value: 'teacher', child: Text(t('Teacher', 'استاد'))),
+                          DropdownMenuItem(value: 'parent', child: Text(t('Parent', 'والدین'))),
+                        ],
+                        onChanged: busy ? null : (value) {
+                          if (value != null) setState(() => requestedRole = value);
+                        },
                       ),
-                      const SizedBox(height: 12),
-                      TextFormField(
-                        controller: addressController,
-                        maxLines: 2,
-                        decoration: InputDecoration(
-                          labelText: t('Home address', 'گھر کا پتہ'),
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      if (requestedRole == 'teacher')
-                        TextFormField(
-                          controller: educationController,
-                          maxLines: 2,
-                          decoration: InputDecoration(
-                            labelText: t(
-                              'Qualifications and experience',
-                              'تعلیمی قابلیت اور تجربہ',
-                            ),
-                          ),
-                        )
-                      else if (requestedRole == 'student')
-                        TextFormField(
-                          controller: classController,
-                          decoration: InputDecoration(
-                            labelText: t(
-                              'Requested class / grade',
-                              'درخواست کردہ کلاس',
-                            ),
-                          ),
-                        ),
-                      const SizedBox(height: 12),
-                      OutlinedButton.icon(
-                        onPressed: busy ? null : pickProfilePhoto,
-                        icon: Icon(
-                          profileImage == null
-                              ? Icons.add_a_photo_outlined
-                              : Icons.check_circle_outline,
-                        ),
-                        label: Text(
-                          profileImage == null
-                              ? t(
-                                  'Upload profile photo *',
-                                  'پروفائل تصویر اپلوڈ کریں *',
-                                )
-                              : t(
-                                  'Profile photo selected',
-                                  'پروفائل تصویر منتخب ہوگئی',
-                                ),
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      OutlinedButton.icon(
-                        onPressed: busy ? null : pickSupportingDocuments,
-                        icon: const Icon(Icons.upload_file_outlined),
-                        label: Text(
-                          supportingDocuments.isEmpty
-                              ? t(
-                                  'Upload supporting document photos (optional)',
-                                  'معاون دستاویزات کی تصاویر اپلوڈ کریں (اختیاری)',
-                                )
-                              : t(
-                                  '${supportingDocuments.length} document image(s) selected',
-                                  '${supportingDocuments.length} دستاویزی تصاویر منتخب',
-                                ),
-                        ),
-                      ),
+                      if (requestedRole == 'teacher') ...[
+                        const SizedBox(height: 12),
+                        TextFormField(controller: qualificationController, decoration: InputDecoration(labelText: t('Qualification', 'تعلیمی قابلیت'))),
+                        const SizedBox(height: 12),
+                        TextFormField(controller: subjectController, decoration: InputDecoration(labelText: t('Subjects you teach', 'مضامین'))),
+                        const SizedBox(height: 12),
+                        TextFormField(controller: experienceController, keyboardType: TextInputType.number, decoration: InputDecoration(labelText: t('Teaching experience (years)', 'تدریسی تجربہ (سال)'))),
+                      ],
+                      if (requestedRole == 'student') ...[
+                        const SizedBox(height: 12),
+                        TextFormField(controller: classController, decoration: InputDecoration(labelText: t('Requested current class / grade', 'درخواست کردہ جماعت'))),
+                        const SizedBox(height: 12),
+                        TextFormField(controller: guardianNameController, decoration: InputDecoration(labelText: t('Guardian full name', 'سرپرست کا مکمل نام'))),
+                        const SizedBox(height: 12),
+                        TextFormField(controller: guardianPhoneController, keyboardType: TextInputType.phone, decoration: InputDecoration(labelText: t('Guardian phone number', 'سرپرست کا فون نمبر'))),
+                        const SizedBox(height: 12),
+                        TextFormField(controller: previousSchoolController, decoration: InputDecoration(labelText: t('Previous school (optional)', 'پچھلا اسکول (اختیاری)'))),
+                        const SizedBox(height: 12),
+                        TextFormField(controller: existingAdmissionController, decoration: InputDecoration(labelText: t('Existing Admission No (if already enrolled)', 'پہلے سے داخل طالب علم کا موجودہ داخلہ نمبر (اگر ہو)'))),
+                      ],
+                      if (requestedRole == 'parent') ...[
+                        const SizedBox(height: 12),
+                        TextFormField(controller: childAdmissionController, decoration: InputDecoration(labelText: t('Child Admission Number (required)', 'بچے کا داخلہ نمبر (ضروری)'))),
+                        const SizedBox(height: 12),
+                        TextFormField(controller: relationshipController, decoration: InputDecoration(labelText: t('Relationship to student', 'طالب علم سے رشتہ'))),
+                        const SizedBox(height: 12),
+                        TextFormField(controller: occupationController, decoration: InputDecoration(labelText: t('Occupation (optional)', 'پیشہ (اختیاری)'))),
+                      ],
                       const SizedBox(height: 16),
                     ],
                     TextFormField(
@@ -719,16 +646,39 @@ class UserGate extends StatelessWidget {
         final data = snapshot.data!.data() ?? {};
         final role = (data['role'] ?? 'pending').toString().toLowerCase();
 
-        if (role == 'rejected' ||
-            (data['approvalStatus'] ?? '').toString().toLowerCase() ==
-                'rejected') {
+        if ((data['approvalStatus'] ?? '').toString().toLowerCase() == 'suspended') {
+          return AccountSuspendedScreen(urdu: urdu);
+        }
+        if (role == 'rejected' || (data['approvalStatus'] ?? '').toString().toLowerCase() == 'rejected') {
           return AccountRejectedScreen(urdu: urdu);
         }
 
         final allowed = ['admin', 'teacher', 'student', 'parent'];
+        final approvalStatus =
+            (data['approvalStatus'] ?? '').toString().toLowerCase();
+        final requestedRole =
+            (data['requestedRole'] ?? '').toString().toLowerCase();
+        final hasIssuedId = switch (role) {
+          'student' => (data['admissionNo'] ?? '').toString().isNotEmpty && ((data['linkedStudentId'] ?? user.uid).toString().isNotEmpty),
+          'teacher' => (data['teacherId'] ?? '').toString().isNotEmpty,
+          'parent' => (data['parentId'] ?? '').toString().isNotEmpty && (data['linkedStudentId'] ?? '').toString().isNotEmpty,
+          'admin' => true,
+          _ => false,
+        };
 
-        if (!allowed.contains(role)) {
-          return PendingScreen(urdu: urdu);
+        // A role label alone must never unlock a non-admin account. The
+        // approval state, requested role, and server-issued identifier must
+        // all agree before a school dashboard is shown.
+        final approvedNonAdmin = role == 'admin' ||
+            (approvalStatus == 'approved' &&
+                requestedRole == role &&
+                hasIssuedId);
+        if (!allowed.contains(role) || !approvedNonAdmin) {
+          return PendingScreen(urdu: urdu, user: user);
+        }
+
+        if (role == 'admin') {
+          return AdminClaimGate(user: user, urdu: urdu);
         }
 
         return DashboardScreen(
@@ -740,6 +690,241 @@ class UserGate extends StatelessWidget {
       },
     );
   }
+}
+
+class AdminClaimGate extends StatelessWidget {
+  const AdminClaimGate({super.key, required this.user, required this.urdu});
+  final User user;
+  final bool urdu;
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<IdTokenResult>(
+      future: user.getIdTokenResult(true),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const LoadingScreen();
+        }
+        final isAdmin = snapshot.hasData &&
+            snapshot.data!.claims?['admin'] == true;
+        if (!isAdmin) {
+          return Scaffold(
+            body: Center(child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                const Icon(Icons.lock_outline, size: 56),
+                const SizedBox(height: 12),
+                Text(urdu
+                    ? 'ایڈمن اکاؤنٹ کی تصدیق نہیں ہوئی۔ براہِ کرم مجاز ایڈمن اکاؤنٹ سے لاگ اِن کریں۔'
+                    : 'Admin authorization could not be verified. Sign in with an authorized admin account.',
+                  textAlign: TextAlign.center),
+                const SizedBox(height: 16),
+                const SignOutButton(urdu: false),
+              ]),
+            )),
+          );
+        }
+        return DashboardScreen(
+          user: user,
+          role: 'admin',
+          urdu: urdu,
+          name: user.displayName ?? user.email ?? 'SchoolPro Admin',
+        );
+      },
+    );
+  }
+}
+
+class MyProfileScreen extends StatefulWidget {
+  const MyProfileScreen({super.key, required this.user, required this.urdu});
+  final User user;
+  final bool urdu;
+
+  @override
+  State<MyProfileScreen> createState() => _MyProfileScreenState();
+}
+
+class _MyProfileScreenState extends State<MyProfileScreen> {
+  final _name = TextEditingController();
+  final _phone = TextEditingController();
+  final _dob = TextEditingController();
+  final _address = TextEditingController();
+  final _emergencyName = TextEditingController();
+  final _emergencyPhone = TextEditingController();
+  final _guardianName = TextEditingController();
+  final _guardianPhone = TextEditingController();
+  final _previousSchool = TextEditingController();
+  final _qualification = TextEditingController();
+  final _subjects = TextEditingController();
+  final _experience = TextEditingController();
+  final _relationship = TextEditingController();
+  final _occupation = TextEditingController();
+  String _gender = 'prefer_not_to_say';
+  bool _loaded = false;
+  bool _saving = false;
+  String _error = '';
+
+  String t(String en, String ur) => widget.urdu ? ur : en;
+
+  @override
+  void dispose() {
+    _name.dispose(); _phone.dispose(); _dob.dispose(); _address.dispose();
+    _emergencyName.dispose(); _emergencyPhone.dispose(); _guardianName.dispose();
+    _guardianPhone.dispose(); _previousSchool.dispose(); _qualification.dispose();
+    _subjects.dispose(); _experience.dispose(); _relationship.dispose(); _occupation.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    final name = _name.text.trim();
+    final phone = _phone.text.trim();
+    if (name.length < 2 || name.length > 100 || phone.length > 30) {
+      setState(() => _error = t(
+        'Enter a name (2–100 characters) and a phone number up to 30 characters.',
+        'نام 2 سے 100 حروف اور فون نمبر زیادہ سے زیادہ 30 حروف میں درج کریں۔',
+      ));
+      return;
+    }
+    setState(() { _saving = true; _error = ''; });
+    try {
+      final dob = _dob.text.trim();
+      if (!RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(dob) || DateTime.tryParse(dob) == null || DateTime.parse(dob).isAfter(DateTime.now()) || _address.text.trim().length < 5) {
+        throw StateError('Enter a valid date of birth and a complete address.');
+      }
+      final profile = <String,dynamic>{
+        'name': name, 'phone': phone, 'dateOfBirth': dob, 'gender': _gender,
+        'address': _address.text.trim(), 'emergencyContactName': _emergencyName.text.trim(),
+        'emergencyContactPhone': _emergencyPhone.text.trim(),
+      };
+      final snapshot = await FirebaseFirestore.instance.collection('users').doc(widget.user.uid).get();
+      final role = (snapshot.data()?['role'] ?? '').toString();
+      if (role == 'student') {
+        profile.addAll({'guardianName':_guardianName.text.trim(),'guardianPhone':_guardianPhone.text.trim(),'previousSchool':_previousSchool.text.trim()});
+      } else if (role == 'teacher') {
+        final years = int.tryParse(_experience.text.trim());
+        if (years == null || years < 0 || years > 60) throw StateError('Experience must be between 0 and 60 years.');
+        profile.addAll({'qualification':_qualification.text.trim(),'subjects':_subjects.text.trim(),'experienceYears':years});
+      } else if (role == 'parent') {
+        profile.addAll({'relationshipToStudent':_relationship.text.trim(),'occupation':_occupation.text.trim()});
+      }
+      await FirebaseFunctions.instanceFor(region: 'asia-south1').httpsCallable('updateOwnSchoolProfile').call({'profile': profile});
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(t('Profile updated.', 'پروفائل اپ ڈیٹ ہوگیا۔')),
+        ));
+      }
+    } catch (e) {
+      if (mounted) setState(() => _error = t(
+        'Profile could not be saved. Check your connection and account permissions.',
+        'پروفائل محفوظ نہیں ہو سکا۔ انٹرنیٹ اور اکاؤنٹ کی اجازت چیک کریں۔',
+      ));
+      debugPrint('SCHOOLPRO PROFILE SAVE ERROR: $e');
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text(t('My profile', 'میرا پروفائل'))),
+      body: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+        stream: FirebaseFirestore.instance.collection('users')
+            .doc(widget.user.uid).snapshots(),
+        builder: (context, snapshot) {
+          if (snapshot.hasError) return Center(child: Text(t(
+            'Unable to load your profile.', 'آپ کا پروفائل نہیں کھل سکا۔')));
+          if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+          final data = snapshot.data?.data() ?? <String, dynamic>{};
+          if (!_loaded) {
+            _name.text = (data['name'] ?? data['displayName'] ?? '').toString();
+            _phone.text = (data['phone'] ?? '').toString();
+            _dob.text = (data['dateOfBirth'] ?? '').toString();
+            _address.text = (data['address'] ?? '').toString();
+            _emergencyName.text = (data['emergencyContactName'] ?? '').toString();
+            _emergencyPhone.text = (data['emergencyContactPhone'] ?? '').toString();
+            _guardianName.text = (data['guardianName'] ?? '').toString();
+            _guardianPhone.text = (data['guardianPhone'] ?? '').toString();
+            _previousSchool.text = (data['previousSchool'] ?? '').toString();
+            _qualification.text = (data['qualification'] ?? '').toString();
+            _subjects.text = (data['subjects'] ?? '').toString();
+            _experience.text = (data['experienceYears'] ?? 0).toString();
+            _relationship.text = (data['relationshipToStudent'] ?? '').toString();
+            _occupation.text = (data['occupation'] ?? '').toString();
+            final storedGender = (data['gender'] ?? 'prefer_not_to_say').toString();
+            _gender = ['male','female','other','prefer_not_to_say'].contains(storedGender) ? storedGender : 'prefer_not_to_say';
+            _loaded = true;
+          }
+          final role = (data['role'] ?? '').toString();
+          final schoolId = switch (role) {
+            'student' => data['admissionNo'],
+            'teacher' => data['teacherId'],
+            'parent' => data['parentId'],
+            _ => null,
+          };
+          return ListView(padding: const EdgeInsets.all(16), children: [
+            Card(child: Padding(padding: const EdgeInsets.all(16), child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(widget.user.email ?? '', style: Theme.of(context).textTheme.titleMedium),
+                const SizedBox(height: 8),
+                Text('${t('Role', 'کردار')}: $role'),
+                if (schoolId != null) Text('${t('School ID', 'اسکول آئی ڈی')}: $schoolId'),
+                Text('${t('Approval', 'منظوری')}: ${data['approvalStatus'] ?? '-'}'),
+              ],
+            ))),
+            const SizedBox(height: 16),
+            TextField(controller: _name, maxLength: 100,
+              decoration: InputDecoration(labelText: t('Full name', 'پورا نام'))),
+            TextField(controller: _phone, maxLength: 30, keyboardType: TextInputType.phone,
+              decoration: InputDecoration(labelText: t('Phone', 'فون نمبر'))),
+            TextField(controller: _dob, decoration: InputDecoration(labelText: t('Date of birth (YYYY-MM-DD)', 'تاریخِ پیدائش (YYYY-MM-DD)'))),
+            DropdownButtonFormField<String>(value: _gender, decoration: InputDecoration(labelText: t('Gender', 'جنس')), items: [
+              DropdownMenuItem(value:'male',child:Text(t('Male','مرد'))), DropdownMenuItem(value:'female',child:Text(t('Female','عورت'))),
+              DropdownMenuItem(value:'other',child:Text(t('Other','دیگر'))), DropdownMenuItem(value:'prefer_not_to_say',child:Text(t('Prefer not to say','بتانا نہیں چاہتے'))),
+            ], onChanged: (v) { if(v!=null) setState(()=>_gender=v); }),
+            TextField(controller: _address, maxLines: 2, decoration: InputDecoration(labelText: t('Residential address', 'رہائشی پتہ'))),
+            TextField(controller: _emergencyName, decoration: InputDecoration(labelText: t('Emergency contact name', 'ہنگامی رابطہ نام'))),
+            TextField(controller: _emergencyPhone, keyboardType: TextInputType.phone, decoration: InputDecoration(labelText: t('Emergency contact phone', 'ہنگامی رابطہ فون'))),
+            if (role == 'student') ...[
+              TextField(controller:_guardianName, decoration:InputDecoration(labelText:t('Guardian name','سرپرست کا نام'))),
+              TextField(controller:_guardianPhone, decoration:InputDecoration(labelText:t('Guardian phone','سرپرست کا فون'))),
+              TextField(controller:_previousSchool, decoration:InputDecoration(labelText:t('Previous school','پچھلا اسکول'))),
+            ],
+            if (role == 'teacher') ...[
+              TextField(controller:_qualification, decoration:InputDecoration(labelText:t('Qualification','تعلیمی قابلیت'))),
+              TextField(controller:_subjects, decoration:InputDecoration(labelText:t('Subjects','مضامین'))),
+              TextField(controller:_experience, keyboardType:TextInputType.number, decoration:InputDecoration(labelText:t('Experience (years)','تجربہ (سال)'))),
+            ],
+            if (role == 'parent') ...[
+              TextField(controller:_relationship, decoration:InputDecoration(labelText:t('Relationship to student','طالب علم سے رشتہ'))),
+              TextField(controller:_occupation, decoration:InputDecoration(labelText:t('Occupation','پیشہ'))),
+            ],
+            if (_error.isNotEmpty) Padding(padding: const EdgeInsets.symmetric(vertical: 8),
+              child: Text(_error, style: TextStyle(color: Theme.of(context).colorScheme.error))),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => ProfileDocumentsScreen(user: widget.user, urdu: widget.urdu))), icon: const Icon(Icons.folder_shared), label: Text(t('Profile photo & documents', 'پروفائل تصویر اور دستاویزات'))),
+                        FilledButton.icon(onPressed: _saving ? null : _save,
+              icon: _saving ? const SizedBox(width: 18, height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.save),
+              label: Text(t('Save profile', 'پروفائل محفوظ کریں'))),
+          ]);
+        },
+      ),
+    );
+  }
+}
+
+class AccountSuspendedScreen extends StatelessWidget {
+  const AccountSuspendedScreen({super.key, required this.urdu});
+  final bool urdu;
+  @override
+  Widget build(BuildContext context) => Scaffold(body: Center(child: Padding(
+    padding: const EdgeInsets.all(24), child: Column(mainAxisSize: MainAxisSize.min, children: [
+      const Icon(Icons.pause_circle_outline, size: 56), const SizedBox(height: 12),
+      Text(urdu ? 'یہ اکاؤنٹ عارضی طور پر معطل ہے۔ مزید معلومات کے لیے اسکول انتظامیہ سے رابطہ کریں۔' : 'This account is suspended. Contact school administration for assistance.', textAlign: TextAlign.center),
+      const SizedBox(height: 16), const SignOutButton(urdu: false),
+    ]),
+  )));
 }
 
 class AccountRejectedScreen extends StatelessWidget {
@@ -819,9 +1004,10 @@ class ProfileMissingScreen extends StatelessWidget {
 }
 
 class PendingScreen extends StatelessWidget {
-  const PendingScreen({super.key, required this.urdu});
+  const PendingScreen({super.key, required this.urdu, this.user});
 
   final bool urdu;
+  final User? user;
 
   @override
   Widget build(BuildContext context) {
@@ -841,6 +1027,16 @@ class PendingScreen extends StatelessWidget {
                     : 'Your account is awaiting approval. Contact the school admin.',
                 textAlign: TextAlign.center,
               ),
+              if (user != null) ...[
+                const SizedBox(height: 16),
+                OutlinedButton.icon(
+                  onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(
+                    builder: (_) => ProfileDocumentsScreen(user: user!, urdu: urdu),
+                  )),
+                  icon: const Icon(Icons.upload_file),
+                  label: Text(urdu ? 'تصویر اور دستاویزات اپلوڈ کریں' : 'Upload profile photo and documents'),
+                ),
+              ],
               const SizedBox(height: 20),
               SignOutButton(urdu: urdu),
             ],
@@ -849,6 +1045,29 @@ class PendingScreen extends StatelessWidget {
       ),
     );
   }
+}
+
+String? _adminCollectionFor(String label) {
+  const collections = <String, String>{
+    'Teachers': 'teachers',
+    'Teacher Attendance': 'teacherAttendance',
+    'Teacher Payroll': 'teacherPayroll',
+    'Parents': 'parents',
+    'Classes': 'classes',
+    'Subjects': 'subjects',
+    'Timetable': 'timetables',
+    'Fees & Receipts': 'feeStructures',
+    'Fee Payments': 'feePayments',
+    'Exams': 'exams',
+    'Results': 'results',
+    'Homework': 'assignments',
+    'Homework Submissions': 'homeworkSubmissions',
+    'Expenses': 'expenses',
+    'Announcements': 'notices',
+    'Reports': 'reports',
+    'School Settings': 'schoolSettings',
+  };
+  return collections[label];
 }
 
 class DashboardScreen extends StatelessWidget {
@@ -871,72 +1090,55 @@ class DashboardScreen extends StatelessWidget {
     final common = <Map<String, dynamic>>[
       {'icon': Icons.people, 'en': 'Students', 'ur': 'طلبہ'},
       {'icon': Icons.co_present, 'en': 'Teachers', 'ur': 'اساتذہ'},
+      {'icon': Icons.access_time, 'en': 'Teacher Attendance', 'ur': 'اساتذہ کی حاضری'},
+      {'icon': Icons.account_balance_wallet_outlined, 'en': 'Teacher Payroll', 'ur': 'اساتذہ کی تنخواہیں'},
+      {'icon': Icons.family_restroom, 'en': 'Parents', 'ur': 'والدین'},
       {'icon': Icons.class_, 'en': 'Classes', 'ur': 'کلاسیں'},
+      {'icon': Icons.menu_book, 'en': 'Subjects', 'ur': 'مضامین'},
+      {'icon': Icons.calendar_month, 'en': 'Timetable', 'ur': 'ٹائم ٹیبل'},
+      {'icon': Icons.event_busy, 'en': 'Leave Requests', 'ur': 'چھٹی کی درخواستیں'},
+      {'icon': Icons.analytics_outlined, 'en': 'Attendance Reports', 'ur': 'حاضری رپورٹس'},
       {'icon': Icons.fact_check, 'en': 'Attendance', 'ur': 'حاضری'},
       {'icon': Icons.payments, 'en': 'Fees & Receipts', 'ur': 'فیس اور رسیدیں'},
-      {
-        'icon': Icons.assessment,
-        'en': 'Exams & Results',
-        'ur': 'امتحانات اور نتائج',
-      },
-      {'icon': Icons.menu_book, 'en': 'Homework', 'ur': 'ہوم ورک'},
+      {'icon': Icons.receipt_long, 'en': 'Fee Payments', 'ur': 'فیس ادائیگیاں'},
+      {'icon': Icons.assessment, 'en': 'Exams', 'ur': 'امتحانات'},
+      {'icon': Icons.grade, 'en': 'Results', 'ur': 'نتائج'},
+      {'icon': Icons.insert_drive_file_outlined, 'en': 'Report Cards', 'ur': 'رپورٹ کارڈز'},
+      {'icon': Icons.assignment, 'en': 'Homework', 'ur': 'ہوم ورک'},
+      {'icon': Icons.assignment_turned_in, 'en': 'My Submissions', 'ur': 'میری جمع شدہ اسائنمنٹس'},
+      {'icon': Icons.rate_review, 'en': 'Homework Submissions', 'ur': 'ہوم ورک کا جائزہ'},
+      {'icon': Icons.account_balance_wallet, 'en': 'Expenses', 'ur': 'اخراجات'},
       {'icon': Icons.campaign, 'en': 'Announcements', 'ur': 'اعلانات'},
-      {
-        'icon': Icons.badge_outlined,
-        'en': 'My Profile / ID Card',
-        'ur': 'میرا پروفائل / شناختی کارڈ',
-      },
+      {'icon': Icons.notifications_active, 'en': 'Notifications', 'ur': 'اطلاعات'},
+      {'icon': Icons.analytics, 'en': 'Reports', 'ur': 'رپورٹس'},
+      {'icon': Icons.settings, 'en': 'School Settings', 'ur': 'اسکول سیٹنگز'},
     ];
 
     switch (role) {
       case 'admin':
         return [
           ...common,
-          {
-            'icon': Icons.admin_panel_settings,
-            'en': 'User Approvals',
-            'ur': 'صارفین کی منظوری',
-          },
+          {'icon': Icons.admin_panel_settings, 'en': 'User Approvals', 'ur': 'صارفین کی منظوری'},
+          {'icon': Icons.account_tree_outlined, 'en': 'School Workflows', 'ur': 'اسکول انتظامی ورک فلو'},
+          {'icon': Icons.rate_review, 'en': 'Homework Submissions', 'ur': 'ہوم ورک کا جائزہ'},
         ];
       case 'teacher':
-        return common
-            .where(
-              (m) => [
-                'Classes',
-                'Attendance',
-                'Exams & Results',
-                'Homework',
-                'Announcements',
-                'My Profile / ID Card',
-              ].contains(m['en']),
-            )
-            .toList();
+        return common.where((m) => [
+          'Classes', 'Subjects', 'Timetable', 'Attendance', 'Attendance Reports', 'Leave Requests', 'Exams',
+          'Results', 'Homework', 'Homework Submissions', 'Teacher Attendance', 'Teacher Payroll', 'Announcements', 'Notifications',
+        ].contains(m['en'])).toList();
       case 'student':
-        return common
-            .where(
-              (m) => [
-                'Attendance',
-                'Fees & Receipts',
-                'Exams & Results',
-                'Homework',
-                'Announcements',
-                'My Profile / ID Card',
-              ].contains(m['en']),
-            )
-            .toList();
+        return common.where((m) => [
+          'Timetable', 'Attendance', 'Fees & Receipts', 'Exams',
+          'Results', 'Report Cards', 'Homework', 'My Submissions', 'Announcements', 'Notifications',
+        ].contains(m['en'])).toList();
+      case 'parent':
+        return common.where((m) => [
+          'Timetable', 'Attendance', 'Fees & Receipts', 'Exams',
+          'Results', 'Report Cards', 'Homework', 'My Submissions', 'Announcements', 'Notifications',
+        ].contains(m['en'])).toList();
       default:
-        return common
-            .where(
-              (m) => [
-                'Attendance',
-                'Fees & Receipts',
-                'Exams & Results',
-                'Homework',
-                'Announcements',
-                'My Profile / ID Card',
-              ].contains(m['en']),
-            )
-            .toList();
+        return const [];
     }
   }
 
@@ -965,6 +1167,18 @@ class DashboardScreen extends StatelessWidget {
         title: const Text('SchoolPro'),
         actions: [
           IconButton(
+            tooltip: label('My profile', 'میرا پروفائل'),
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => MyProfileScreen(
+                  user: user,
+                  urdu: urdu,
+                ),
+              ),
+            ),
+            icon: const Icon(Icons.account_circle_outlined),
+          ),
+          IconButton(
             tooltip: label('Logout', 'لاگ آؤٹ'),
             onPressed: () => FirebaseAuth.instance.signOut(),
             icon: const Icon(Icons.logout),
@@ -990,25 +1204,6 @@ class DashboardScreen extends StatelessWidget {
                   const SizedBox(height: 8),
                   Text(name),
                   Text('${label('Role', 'کردار')}: ${roleLabel()}'),
-                  StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-                    stream: FirebaseFirestore.instance
-                        .collection('users')
-                        .doc(user.uid)
-                        .snapshots(),
-                    builder: (context, snap) {
-                      final d = snap.data?.data() ?? {};
-                      final schoolId = (d['schoolId'] ?? d['admissionNo'] ?? '')
-                          .toString();
-                      if (schoolId.isEmpty) return const SizedBox.shrink();
-                      return Padding(
-                        padding: const EdgeInsets.only(top: 8),
-                        child: Chip(
-                          avatar: const Icon(Icons.badge_outlined),
-                          label: Text(schoolId),
-                        ),
-                      );
-                    },
-                  ),
                 ],
               ),
             ),
@@ -1035,87 +1230,9 @@ class DashboardScreen extends StatelessWidget {
                 child: InkWell(
                   borderRadius: BorderRadius.circular(12),
                   onTap: () {
-                    if (item['en'] == 'My Profile / ID Card') {
-                      Navigator.of(context).push(
-                        MaterialPageRoute<void>(
-                          builder: (_) =>
-                              ProfileCardScreen(user: user, urdu: urdu),
-                        ),
-                      );
-                    } else if (item['en'] == 'Announcements') {
-                      Navigator.of(context).push(
-                        MaterialPageRoute<void>(
-                          builder: (_) => SchoolDataModuleScreen(
-                            collectionName: 'announcements',
-                            titleEn: 'Announcements',
-                            titleUr: 'اعلانات',
-                            role: role,
-                            urdu: urdu,
-                          ),
-                        ),
-                      );
-                    } else if (item['en'] == 'Teachers' && role == 'admin') {
-                      Navigator.of(context).push(
-                        MaterialPageRoute<void>(
-                          builder: (_) => SchoolDataModuleScreen(
-                            collectionName: 'teachers',
-                            titleEn: 'Teachers',
-                            titleUr: 'اساتذہ',
-                            role: role,
-                            urdu: urdu,
-                          ),
-                        ),
-                      );
-                    } else if (item['en'] == 'Classes') {
-                      Navigator.of(context).push(
-                        MaterialPageRoute<void>(
-                          builder: (_) => SchoolDataModuleScreen(
-                            collectionName: 'classes',
-                            titleEn: 'Classes',
-                            titleUr: 'کلاسیں',
-                            role: role,
-                            urdu: urdu,
-                          ),
-                        ),
-                      );
-                    } else if (item['en'] == 'Fees & Receipts') {
-                      Navigator.of(context).push(
-                        MaterialPageRoute<void>(
-                          builder: (_) => SchoolDataModuleScreen(
-                            collectionName: 'fees',
-                            titleEn: 'Fees & Receipts',
-                            titleUr: 'فیس اور رسیدیں',
-                            role: role,
-                            urdu: urdu,
-                          ),
-                        ),
-                      );
-                    } else if (item['en'] == 'Exams & Results') {
-                      Navigator.of(context).push(
-                        MaterialPageRoute<void>(
-                          builder: (_) => SchoolDataModuleScreen(
-                            collectionName: 'exams',
-                            titleEn: 'Exams & Results',
-                            titleUr: 'امتحانات اور نتائج',
-                            role: role,
-                            urdu: urdu,
-                          ),
-                        ),
-                      );
-                    } else if (item['en'] == 'Homework') {
-                      Navigator.of(context).push(
-                        MaterialPageRoute<void>(
-                          builder: (_) => SchoolDataModuleScreen(
-                            collectionName: 'homework',
-                            titleEn: 'Homework',
-                            titleUr: 'ہوم ورک',
-                            role: role,
-                            urdu: urdu,
-                          ),
-                        ),
-                      );
-                    } else if (item['en'] == 'User Approvals' &&
-                        role == 'admin') {
+                    if (item['en'] == 'School Workflows' && role == 'admin') {
+                      Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const AdminWorkflowsScreen()));
+                    } else if (item['en'] == 'User Approvals' && role == 'admin') {
                       Navigator.of(context).push(
                         MaterialPageRoute<void>(
                           builder: (_) => UserApprovalsScreen(urdu: urdu),
@@ -1127,22 +1244,45 @@ class DashboardScreen extends StatelessWidget {
                           builder: (_) => StudentsScreen(urdu: urdu),
                         ),
                       );
-                    } else if (item['en'] == 'Attendance') {
+                    } else if (item['en'] == 'Attendance' && role == 'admin') {
                       Navigator.of(context).push(
                         MaterialPageRoute<void>(
                           builder: (_) => AttendanceScreen(urdu: urdu),
                         ),
                       );
-                    } else {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text(
-                            label(
-                              '${item['en']} module will be implemented next.',
-                              '${item['ur']} کا ماڈیول اگلے مرحلے میں تیار ہوگا۔',
-                            ),
+                    } else if (item['en'] == 'Leave Requests' && role == 'teacher') {
+                      Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => TeacherLeaveScreen(user: user, urdu: urdu)));
+                    } else if (item['en'] == 'Attendance' && role == 'teacher') {
+                      Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => TeacherAttendanceEntry(user: user, urdu: urdu),
+                        ),
+                      );
+                    } else if (role == 'admin' && _adminCollectionFor(item['en']) != null) {
+                      final collection = _adminCollectionFor(item['en'])!;
+                      Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => AdminCollectionScreen(
+                            title: item['en'] as String,
+                            collectionName: collection,
+                            description: 'Manage $collection records in the SchoolPro Firestore database.',
                           ),
                         ),
+                      );
+                    } else if (role != 'admin') {
+                      Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => RoleModuleScreen(
+                            user: user,
+                            role: role,
+                            module: item['en'] as String,
+                            urdu: urdu,
+                          ),
+                        ),
+                      );
+                    } else {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text(label('This module is not configured.', 'یہ ماڈیول ترتیب نہیں دیا گیا۔'))),
                       );
                     }
                   },
@@ -1180,6 +1320,312 @@ class DashboardScreen extends StatelessWidget {
   }
 }
 
+class RoleModuleScreen extends StatelessWidget {
+  const RoleModuleScreen({
+    super.key,
+    required this.user,
+    required this.role,
+    required this.module,
+    required this.urdu,
+  });
+
+  final User user;
+  final String role;
+  final String module;
+  final bool urdu;
+
+  String t(String en, String ur) => urdu ? ur : en;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text(module)),
+      body: FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+        future: FirebaseFirestore.instance.collection('users').doc(user.uid).get(),
+        builder: (context, profileSnapshot) {
+          if (profileSnapshot.hasError) return Center(child: Text(t('Could not load your profile.', 'آپ کا پروفائل نہیں کھل سکا۔')));
+          if (!profileSnapshot.hasData) return const Center(child: CircularProgressIndicator());
+          final profile = profileSnapshot.data!.data() ?? <String, dynamic>{};
+          final isParent = role == 'parent';
+          final className = (profile['currentClass'] ?? '').toString();
+          final teacherId = (profile['teacherId'] ?? '').toString();
+          final studentDocIds = isParent
+              ? ((profile['linkedStudentIds'] as List?)?.map((e) => e.toString()).toList() ?? <String>[(profile['linkedStudentId'] ?? '').toString()]).where((e) => e.isNotEmpty).toList()
+              : (role == 'student' ? <String>[(profile['linkedStudentId'] ?? user.uid).toString()] : <String>[]);
+          final studentDocId = studentDocIds.isEmpty ? '' : studentDocIds.first;
+          if ((role == 'student' || isParent) && studentDocIds.isEmpty) {
+            return Center(child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Text(t('A verified student record is not linked to this account. Contact the school office.', 'اس اکاؤنٹ کے ساتھ تصدیق شدہ طالب علم ریکارڈ منسلک نہیں۔ اسکول آفس سے رابطہ کریں۔'), textAlign: TextAlign.center),
+            ));
+          }
+          if (role == 'student' || isParent) {
+            return FutureBuilder<List<DocumentSnapshot<Map<String, dynamic>>>>(
+              future: Future.wait(studentDocIds.map((id) => FirebaseFirestore.instance.collection('students').doc(id).get())),
+              builder: (context, studentSnapshot) {
+                if (studentSnapshot.hasError) return Center(child: Text(t('Student records could not be loaded. Check access permissions.', 'طالب علم کا ریکارڈ نہیں کھل سکا۔ رسائی کی اجازت چیک کریں۔')));
+                if (!studentSnapshot.hasData) return const Center(child: CircularProgressIndicator());
+                final records = studentSnapshot.data!.where((d) => d.exists).toList();
+                if (records.length != studentDocIds.length) return Center(child: Text(t('One or more linked student records were not found.', 'ایک یا زیادہ منسلک طالب علم ریکارڈ نہیں ملے۔')));
+                final classes = records.map((d) => (d.data()?['className'] ?? '').toString()).where((e) => e.isNotEmpty).toSet().toList();
+                return _buildRecords(context, profile, studentDocId, classes.isEmpty ? className : classes.first, teacherId, studentDocIds: studentDocIds, classNames: classes);
+              },
+            );
+          }
+          return _buildRecords(context, profile, '', className, teacherId);
+        },
+      ),
+    );
+  }
+
+  Widget _buildRecords(BuildContext context, Map<String, dynamic> profile, String studentDocId, String className, String teacherId, {List<String> studentDocIds = const [], List<String> classNames = const []}) {
+    final db = FirebaseFirestore.instance;
+    late final Query<Map<String, dynamic>> query;
+    String empty = t('No records found for this module.', 'اس ماڈیول کے لیے کوئی ریکارڈ موجود نہیں۔');
+    switch (module) {
+      case 'Teacher Attendance':
+        query = db.collection('teacherAttendance').where('teacherUid', isEqualTo: user.uid).orderBy('date', descending: true).limit(200);
+        break;
+      case 'Teacher Payroll':
+        query = db.collection('teacherPayroll').where('teacherUid', isEqualTo: user.uid).orderBy('month', descending: true).limit(120);
+        break;
+      case 'Attendance Reports':
+        query = db.collection('attendance').where('markedBy', isEqualTo: user.uid).limit(500);
+        break;
+      case 'Attendance':
+        query = studentDocIds.length > 1 ? db.collection('attendance').where('studentId', whereIn: studentDocIds.take(10).toList()).limit(100) : db.collection('attendance').where('studentId', isEqualTo: studentDocId).orderBy('date', descending: true).limit(100);
+        break;
+      case 'Fees & Receipts':
+        query = studentDocIds.length > 1 ? db.collection('feePayments').where('studentId', whereIn: studentDocIds.take(10).toList()).limit(100) : db.collection('feePayments').where('studentId', isEqualTo: studentDocId).orderBy('createdAt', descending: true).limit(100);
+        break;
+      case 'Results':
+        query = role == 'teacher'
+            ? db.collection('results').where('teacherId', isEqualTo: teacherId).limit(100)
+            : (studentDocIds.length > 1 ? db.collection('results').where('studentId', whereIn: studentDocIds.take(10).toList()).limit(100) : db.collection('results').where('studentId', isEqualTo: studentDocId).limit(100));
+        break;
+      case 'Report Cards':
+        query = studentDocIds.length > 1
+            ? db.collection('reports').where('reportType', isEqualTo: 'report_card').where('studentId', whereIn: studentDocIds.take(10).toList()).limit(100)
+            : db.collection('reports').where('reportType', isEqualTo: 'report_card').where('studentId', isEqualTo: studentDocId).limit(100);
+        break;
+      case 'My Submissions':
+        query = studentDocIds.length > 1 ? db.collection('homeworkSubmissions').where('studentId', whereIn: studentDocIds.take(10).toList()).limit(100) : db.collection('homeworkSubmissions').where('studentId', isEqualTo: studentDocId).limit(100);
+        break;
+      case 'Homework Submissions':
+        query = db.collection('homeworkSubmissions').where('teacherId', isEqualTo: teacherId).limit(100);
+        break;
+      case 'Homework':
+        query = role == 'teacher'
+            ? db.collection('assignments').where('teacherId', isEqualTo: teacherId).limit(100)
+            : (classNames.length > 1 ? db.collection('assignments').where('className', whereIn: classNames.take(10).toList()).limit(100) : db.collection('assignments').where('className', isEqualTo: className).limit(100));
+        break;
+      case 'Timetable':
+        query = role == 'teacher'
+            ? db.collection('timetables').where('teacherId', isEqualTo: teacherId).limit(100)
+            : (classNames.length > 1 ? db.collection('timetables').where('className', whereIn: classNames.take(10).toList()).limit(100) : db.collection('timetables').where('className', isEqualTo: className).limit(100));
+        break;
+      case 'Exams':
+        query = role == 'teacher'
+            ? db.collection('exams').where('teacherId', isEqualTo: teacherId).limit(100)
+            : (classNames.length > 1 ? db.collection('exams').where('className', whereIn: classNames.take(10).toList()).limit(100) : db.collection('exams').where('className', isEqualTo: className).limit(100));
+        break;
+      case 'Announcements':
+        query = db.collection('notices').where('status', isEqualTo: 'published').limit(100);
+        break;
+      case 'Notifications':
+        query = db.collection('notifications').where('recipientUid', isEqualTo: user.uid).limit(100);
+        break;
+      case 'Classes':
+        query = role == 'teacher'
+            ? db.collection('classes').where('classTeacherId', isEqualTo: teacherId).limit(50)
+            : (classNames.length > 1 ? db.collection('classes').where('name', whereIn: classNames.take(10).toList()).limit(50) : db.collection('classes').where('name', isEqualTo: className).limit(50));
+        break;
+      case 'Subjects':
+        query = role == 'teacher'
+            ? db.collection('subjects').where('teacherId', isEqualTo: teacherId).limit(100)
+            : (classNames.length > 1 ? db.collection('subjects').where('className', whereIn: classNames.take(10).toList()).limit(100) : db.collection('subjects').where('className', isEqualTo: className).limit(100));
+        break;
+      default:
+        return Center(child: Text(empty));
+    }
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: query.snapshots(),
+      builder: (context, snapshot) {
+        if (snapshot.hasError) return Center(child: Padding(padding: const EdgeInsets.all(24), child: Text(t('Access denied or data query failed. Ask the school administrator to check role permissions and required indexes.', 'رسائی مسترد ہوئی یا ڈیٹا کی درخواست ناکام ہوئی۔ اسکول انتظامیہ سے رول اجازتیں اور مطلوبہ انڈیکس چیک کروائیں۔'))));
+        if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+        final docs = snapshot.data!.docs;
+        if (docs.isEmpty) return Center(child: Text(empty));
+        return ListView.builder(
+          padding: const EdgeInsets.all(12),
+          itemCount: docs.length,
+          itemBuilder: (context, index) {
+            final data = docs[index].data();
+            final title = (data['title'] ?? data['subject'] ?? data['name'] ?? data['studentName'] ?? data['className'] ?? module).toString();
+            final subtitle = data.entries
+                .where((entry) => !['createdAt', 'updatedAt'].contains(entry.key))
+                .take(5)
+                .map((entry) => '${entry.key}: ${entry.value is Timestamp ? (entry.value as Timestamp).toDate().toLocal().toString().split('.').first : entry.value}')
+                .join(' • ');
+            return Card(child: ListTile(
+              leading: Icon(_iconFor(module)),
+              title: Text(title),
+              subtitle: Text(subtitle, maxLines: 3, overflow: TextOverflow.ellipsis),
+              trailing: module == 'Homework' && role == 'student' && studentDocId.isNotEmpty
+                  ? TextButton(
+                      onPressed: () => _submitHomework(context, docs[index].id, data, studentDocId),
+                      child: Text(t('Submit', 'جمع کرائیں')),
+                    )
+                  : module == 'Homework Submissions' && role == 'teacher'
+                      ? TextButton(
+                          onPressed: () => _reviewSubmission(context, docs[index].reference, data),
+                          child: Text(t('Review', 'جائزہ')),
+                        )
+                      : module == 'Notifications'
+                          ? IconButton(
+                              tooltip: t('Mark as read', 'پڑھا ہوا نشان زد کریں'),
+                              onPressed: data['isRead'] == true ? null : () => docs[index].reference.update({'isRead': true}),
+                              icon: Icon(data['isRead'] == true ? Icons.done_all : Icons.mark_email_unread),
+                            )
+                          : null,
+            ));
+          },
+        );
+      },
+    );
+  }
+
+  Future<void> _submitHomework(
+    BuildContext context,
+    String assignmentId,
+    Map<String, dynamic> assignment,
+    String studentDocId,
+  ) async {
+    final controller = TextEditingController();
+    final answer = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(t('Submit homework', 'ہوم ورک جمع کرائیں')),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          minLines: 3,
+          maxLines: 8,
+          maxLength: 4000,
+          decoration: InputDecoration(
+            labelText: t('Your answer / work', 'آپ کا جواب / کام'),
+            border: const OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialogContext), child: Text(t('Cancel', 'منسوخ'))),
+          FilledButton(
+            onPressed: () {
+              final value = controller.text.trim();
+              if (value.isNotEmpty) Navigator.pop(dialogContext, value);
+            },
+            child: Text(t('Submit', 'جمع کرائیں')),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (answer == null || answer.trim().isEmpty) return;
+    try {
+      final db = FirebaseFirestore.instance;
+      final existing = await db.collection('homeworkSubmissions')
+          .where('studentId', isEqualTo: studentDocId)
+          .where('assignmentId', isEqualTo: assignmentId)
+          .limit(1).get();
+      if (existing.docs.isNotEmpty) {
+        if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(t('You have already submitted this homework.', 'آپ یہ ہوم ورک پہلے جمع کرا چکے ہیں۔'))),
+        );
+        return;
+      }
+      await db.collection('homeworkSubmissions').doc('${studentDocId}__$assignmentId').set({
+        'studentId': studentDocId,
+        'assignmentId': assignmentId,
+        'assignmentTitle': (assignment['title'] ?? '').toString(),
+        'teacherId': (assignment['teacherId'] ?? '').toString(),
+        'studentName': (user.displayName ?? user.email ?? 'Student').toString(),
+        'answer': answer.trim(),
+        'status': 'submitted',
+        'createdBy': user.uid,
+        'submittedAt': FieldValue.serverTimestamp(),
+      });
+      if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(t('Homework submitted successfully.', 'ہوم ورک کامیابی سے جمع ہوگیا۔'))),
+      );
+    } on FirebaseException catch (e) {
+      if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(t('Submission failed: ${e.code}', 'جمع نہیں ہوا: ${e.code}'))),
+      );
+    }
+  }
+
+  Future<void> _reviewSubmission(
+    BuildContext context,
+    DocumentReference<Map<String, dynamic>> reference,
+    Map<String, dynamic> submission,
+  ) async {
+    final marksController = TextEditingController(text: (submission['marks'] ?? '').toString());
+    final feedbackController = TextEditingController(text: (submission['feedback'] ?? '').toString());
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(t('Review homework', 'ہوم ورک کا جائزہ')),
+        content: SizedBox(width: 420, child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Text((submission['answer'] ?? '').toString()),
+          const SizedBox(height: 12),
+          TextField(controller: marksController, keyboardType: TextInputType.number, decoration: InputDecoration(labelText: t('Marks', 'نمبر'))),
+          TextField(controller: feedbackController, maxLines: 3, maxLength: 1000, decoration: InputDecoration(labelText: t('Feedback', 'رائے'))),
+        ])),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: Text(t('Cancel', 'واپس'))),
+          FilledButton(onPressed: () => Navigator.pop(dialogContext, true), child: Text(t('Save review', 'جائزہ محفوظ کریں'))),
+        ],
+      ),
+    );
+    final marksText = marksController.text.trim();
+    final feedback = feedbackController.text.trim();
+    marksController.dispose();
+    feedbackController.dispose();
+    if (result != true) return;
+    final marks = int.tryParse(marksText);
+    if (marksText.isNotEmpty && (marks == null || marks < 0)) {
+      if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(t('Marks must be a non-negative whole number.', 'نمبر صفر یا اس سے بڑا مکمل عدد ہونا چاہیے۔'))));
+      return;
+    }
+    try {
+      await reference.update({
+        'status': 'reviewed',
+        if (marks != null) 'marks': marks,
+        'feedback': feedback,
+        'reviewedBy': user.uid,
+        'reviewedAt': FieldValue.serverTimestamp(),
+      });
+      if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(t('Review saved.', 'جائزہ محفوظ ہوگیا۔'))));
+    } on FirebaseException catch (e) {
+      if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(t('Review failed: ${e.code}', 'جائزہ محفوظ نہیں ہوا: ${e.code}'))));
+    }
+  }
+
+  IconData _iconFor(String value) => switch (value) {
+    'Attendance' => Icons.fact_check,
+    'Fees & Receipts' => Icons.receipt_long,
+    'Results' => Icons.grade,
+    'Homework' => Icons.assignment,
+    'My Submissions' => Icons.assignment_turned_in,
+    'Homework Submissions' => Icons.rate_review,
+    'Timetable' => Icons.calendar_month,
+    'Exams' => Icons.assessment,
+    'Announcements' => Icons.campaign,
+    'Classes' => Icons.class_,
+    'Subjects' => Icons.menu_book,
+    _ => Icons.school,
+  };
+}
+
 class UserApprovalsScreen extends StatefulWidget {
   const UserApprovalsScreen({super.key, required this.urdu});
   final bool urdu;
@@ -1191,273 +1637,70 @@ class UserApprovalsScreen extends StatefulWidget {
 class _UserApprovalsScreenState extends State<UserApprovalsScreen> {
   bool busy = false;
   String error = '';
+
   String t(String en, String ur) => widget.urdu ? ur : en;
 
-  Future<void> review(String uid) async {
-    final snap = await FirebaseFirestore.instance
-        .collection('users')
-        .doc(uid)
-        .get();
-    if (!mounted || !snap.exists) return;
-    final applicant = snap.data() ?? <String, dynamic>{};
-    final requested = (applicant['requestedRole'] ?? 'student').toString();
-    final roleController = ValueNotifier<String>(
-      ['student', 'teacher', 'parent'].contains(requested)
-          ? requested
-          : 'student',
-    );
-    final studentId = TextEditingController();
-    final admissionNo = TextEditingController();
-    final teacherId = TextEditingController();
-    final className = TextEditingController(
-      text: requested == 'student'
-          ? (applicant['educationOrClass'] ?? '').toString()
-          : '',
-    );
-    final rejectionReason = TextEditingController();
-    final formKey = GlobalKey<FormState>();
-
-    final result = await showDialog<Map<String, String>?>(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, refresh) => AlertDialog(
-          title: Text(t('Review application', 'درخواست کا جائزہ')),
-          content: SizedBox(
-            width: 520,
-            child: SingleChildScrollView(
-              child: Form(
-                key: formKey,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Text('${t('Name', 'نام')}: ${applicant['name'] ?? '-'}'),
-                    Text(
-                      '${t('Email', 'ای میل')}: ${applicant['email'] ?? '-'}',
-                    ),
-                    Text('${t('Phone', 'فون')}: ${applicant['phone'] ?? '-'}'),
-                    Text(
-                      '${t('Guardian', 'سرپرست')}: ${applicant['guardianName'] ?? '-'}',
-                    ),
-                    Text(
-                      '${t('Address', 'پتہ')}: ${applicant['address'] ?? '-'}',
-                    ),
-                    Text(
-                      '${t('Requested role', 'درخواست کردہ کردار')}: $requested',
-                    ),
-                    if (applicant['documentUrls'] is List &&
-                        (applicant['documentUrls'] as List).isNotEmpty) ...[
-                      const SizedBox(height: 8),
-                      Text(
-                        t(
-                          'Supporting document links (open/copy for review):',
-                          'معاون دستاویزات کے لنکس (جائزے کے لیے کھولیں/کاپی کریں):',
-                        ),
-                      ),
-                      for (final url
-                          in (applicant['documentUrls'] as List)
-                              .whereType<String>())
-                        SelectableText(
-                          url,
-                          style: Theme.of(ctx).textTheme.bodySmall,
-                        ),
-                    ],
-                    const Divider(height: 24),
-                    DropdownButtonFormField<String>(
-                      initialValue: roleController.value,
-                      decoration: InputDecoration(
-                        labelText: t('Final role', 'حتمی کردار'),
-                      ),
-                      items: [
-                        DropdownMenuItem(
-                          value: 'student',
-                          child: Text(t('Student', 'طالب علم')),
-                        ),
-                        DropdownMenuItem(
-                          value: 'teacher',
-                          child: Text(t('Teacher', 'استاد')),
-                        ),
-                        DropdownMenuItem(
-                          value: 'parent',
-                          child: Text(t('Parent', 'والدین')),
-                        ),
-                        DropdownMenuItem(
-                          value: 'rejected',
-                          child: Text(
-                            t('Reject application', 'درخواست مسترد کریں'),
-                          ),
-                        ),
-                      ],
-                      onChanged: (v) =>
-                          refresh(() => roleController.value = v ?? 'student'),
-                    ),
-                    if (roleController.value == 'student') ...[
-                      const SizedBox(height: 12),
-                      TextFormField(
-                        controller: studentId,
-                        decoration: InputDecoration(
-                          labelText: t(
-                            'Student ID (manual) *',
-                            'طالب علم آئی ڈی (خود درج کریں) *',
-                          ),
-                        ),
-                        validator: (v) =>
-                            roleController.value == 'student' &&
-                                (v == null || v.trim().isEmpty)
-                            ? t(
-                                'Enter a Student ID.',
-                                'طالب علم آئی ڈی درج کریں۔',
-                              )
-                            : null,
-                      ),
-                      const SizedBox(height: 12),
-                      TextFormField(
-                        controller: admissionNo,
-                        decoration: InputDecoration(
-                          labelText: t(
-                            'Admission Number (separate) *',
-                            'داخلہ نمبر (الگ) *',
-                          ),
-                        ),
-                        validator: (v) =>
-                            roleController.value == 'student' &&
-                                (v == null || v.trim().isEmpty)
-                            ? t(
-                                'Enter an admission number.',
-                                'داخلہ نمبر درج کریں۔',
-                              )
-                            : null,
-                      ),
-                      const SizedBox(height: 12),
-                      TextFormField(
-                        controller: className,
-                        decoration: InputDecoration(
-                          labelText: t('Class / grade *', 'کلاس / جماعت *'),
-                        ),
-                        validator: (v) =>
-                            roleController.value == 'student' &&
-                                (v == null || v.trim().isEmpty)
-                            ? t(
-                                'Enter the approved class.',
-                                'منظور شدہ کلاس درج کریں۔',
-                              )
-                            : null,
-                      ),
-                    ],
-                    if (roleController.value == 'teacher') ...[
-                      const SizedBox(height: 12),
-                      TextFormField(
-                        controller: teacherId,
-                        decoration: InputDecoration(
-                          labelText: t(
-                            'Teacher ID (manual) *',
-                            'ٹیچر آئی ڈی (خود درج کریں) *',
-                          ),
-                        ),
-                        validator: (v) =>
-                            roleController.value == 'teacher' &&
-                                (v == null || v.trim().isEmpty)
-                            ? t('Enter a Teacher ID.', 'ٹیچر آئی ڈی درج کریں۔')
-                            : null,
-                      ),
-                    ],
-                    if (roleController.value == 'rejected') ...[
-                      const SizedBox(height: 12),
-                      TextFormField(
-                        controller: rejectionReason,
-                        maxLines: 3,
-                        decoration: InputDecoration(
-                          labelText: t(
-                            'Reason / corrections required',
-                            'وجہ / مطلوبہ اصلاحات',
-                          ),
-                        ),
-                      ),
-                    ],
-                    const SizedBox(height: 8),
-                    Text(
-                      t(
-                        'IDs are entered by the admin. Student ID and Admission Number are different fields; no ID is generated automatically.',
-                        'آئی ڈیز ایڈمن خود درج کرے گا۔ طالب علم آئی ڈی اور داخلہ نمبر الگ ہیں؛ کوئی آئی ڈی خودکار نہیں بنے گی۔',
-                      ),
-                      style: Theme.of(ctx).textTheme.bodySmall,
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: Text(t('Cancel', 'منسوخ')),
-            ),
-            FilledButton(
-              onPressed: () {
-                if (!formKey.currentState!.validate()) return;
-                Navigator.pop(ctx, {
-                  'role': roleController.value,
-                  'studentId': studentId.text.trim(),
-                  'admissionNo': admissionNo.text.trim(),
-                  'teacherId': teacherId.text.trim(),
-                  'className': className.text.trim(),
-                  'rejectionReason': rejectionReason.text.trim(),
-                });
-              },
-              child: Text(t('Save decision', 'فیصلہ محفوظ کریں')),
-            ),
-          ],
-        ),
-      ),
-    );
-    roleController.dispose();
-    studentId.dispose();
-    admissionNo.dispose();
-    teacherId.dispose();
-    className.dispose();
-    rejectionReason.dispose();
-    if (result == null || !mounted) return;
-    await decide(uid, applicant, result);
+  Future<void> showSubmittedDocuments(Map<String,dynamic> data) async {
+    final docs = (data['uploadedDocuments'] as List? ?? const []).whereType<Map>().toList();
+    await showDialog<void>(context: context, builder: (ctx) => AlertDialog(
+      title: Text(t('Submitted profile documents','جمع کرائی گئی دستاویزات')),
+      content: SizedBox(width:460, child: SingleChildScrollView(child: Column(crossAxisAlignment:CrossAxisAlignment.start, children: [
+        if ((data['photoUrl']??'').toString().isNotEmpty) ...[Text(t('Profile photo URL','پروفائل تصویر کا لنک')),SelectableText((data['photoUrl']??'').toString()),const Divider()],
+        for(final item in docs) ...[Text((item['name']??'Document').toString(),style:const TextStyle(fontWeight:FontWeight.bold)),SelectableText((item['url']??'').toString()),const Divider()],
+        if(docs.isEmpty && (data['photoUrl']??'').toString().isEmpty) Text(t('No documents uploaded.','ابھی کوئی دستاویز اپلوڈ نہیں ہوئی۔')),
+      ]))),
+      actions:[TextButton(onPressed:()=>Navigator.pop(ctx),child:Text(t('Close','بند کریں')))],
+    ));
   }
 
-  String _normalId(String value) => value.trim().toUpperCase();
-  bool _validId(String value) =>
-      RegExp(r'^[A-Za-z0-9_-]{2,30}$').hasMatch(value.trim());
-
-  Future<void> decide(
-    String uid,
-    Map<String, dynamic> applicant,
-    Map<String, String> decision,
-  ) async {
+  Future<void> editRequest(String uid, Map<String,dynamic> data) async {
     if (busy) return;
-    final role = decision['role'] ?? 'rejected';
-    final approved = role != 'rejected';
-    final sid = decision['studentId'] ?? '';
-    final admission = decision['admissionNo'] ?? '';
-    final tid = decision['teacherId'] ?? '';
-    final className = decision['className'] ?? '';
-    if (role == 'student' &&
-        (!_validId(sid) ||
-            !_validId(admission) ||
-            sid.toUpperCase() == admission.toUpperCase())) {
-      setState(
-        () => error = t(
-          'Enter valid, different Student ID and Admission Number (2–30 letters/numbers, _ or -).',
-          'درست اور الگ طالب علم آئی ڈی اور داخلہ نمبر درج کریں (2 تا 30 حروف/اعداد، _ یا -)۔',
-        ),
-      );
-      return;
-    }
-    if (role == 'teacher' && !_validId(tid)) {
-      setState(
-        () => error = t(
-          'Enter a valid Teacher ID (2–30 letters/numbers, _ or -).',
-          'درست ٹیچر آئی ڈی درج کریں (2 تا 30 حروف/اعداد، _ یا -)۔',
-        ),
-      );
-      return;
-    }
+    final fields = <String,TextEditingController>{
+      'name':TextEditingController(text:(data['name']??'').toString()),
+      'phone':TextEditingController(text:(data['phone']??'').toString()),
+      'dateOfBirth':TextEditingController(text:(data['dateOfBirth']??'').toString()),
+      'gender':TextEditingController(text:(data['gender']??'prefer_not_to_say').toString()),
+      'address':TextEditingController(text:(data['address']??'').toString()),
+      'currentClass':TextEditingController(text:(data['currentClass']??'').toString()),
+      'guardianName':TextEditingController(text:(data['guardianName']??'').toString()),
+      'guardianPhone':TextEditingController(text:(data['guardianPhone']??'').toString()),
+      'previousSchool':TextEditingController(text:(data['previousSchool']??'').toString()),
+      'qualification':TextEditingController(text:(data['qualification']??'').toString()),
+      'subjects':TextEditingController(text:(data['subjects']??'').toString()),
+      'experienceYears':TextEditingController(text:(data['experienceYears']??0).toString()),
+      'childAdmissionNo':TextEditingController(text:(data['childAdmissionNo']??'').toString()),
+      'existingAdmissionNo':TextEditingController(text:(data['existingAdmissionNo']??'').toString()),
+      'relationshipToStudent':TextEditingController(text:(data['relationshipToStudent']??'').toString()),
+      'occupation':TextEditingController(text:(data['occupation']??'').toString()),
+    };
+    try {
+      final save = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(
+        title: Text(t('Edit registration request','درخواست میں ترمیم')),
+        content: SizedBox(width:460, child: SingleChildScrollView(child: Column(mainAxisSize:MainAxisSize.min, children: [
+          for(final e in fields.entries) if ((data['requestedRole']=='student' && ['currentClass','guardianName','guardianPhone','previousSchool','existingAdmissionNo'].contains(e.key)) || (data['requestedRole']=='teacher' && ['qualification','subjects','experienceYears'].contains(e.key)) || (data['requestedRole']=='parent' && ['childAdmissionNo','relationshipToStudent','occupation'].contains(e.key)) || ['name','phone','dateOfBirth','gender','address'].contains(e.key))
+            Padding(padding:const EdgeInsets.only(bottom:8),child:TextField(controller:e.value,decoration:InputDecoration(labelText:e.key))),
+        ]))),
+        actions: [TextButton(onPressed:()=>Navigator.pop(ctx,false),child:Text(t('Cancel','واپس'))),FilledButton(onPressed:()=>Navigator.pop(ctx,true),child:Text(t('Save','محفوظ کریں')))],
+      ));
+      if (save != true) return;
+      final dob = fields['dateOfBirth']!.text.trim();
+      if (fields['name']!.text.trim().length<2 || !RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(dob) || DateTime.tryParse(dob)==null || fields['address']!.text.trim().length<5) {
+        throw StateError(t('Name, valid date of birth and address are required.','نام، درست تاریخِ پیدائش اور پتہ ضروری ہیں۔'));
+      }
+      final update=<String,dynamic>{};
+      for(final e in fields.entries){
+        if(e.key=='experienceYears') update[e.key]=int.tryParse(e.value.text.trim())??0;
+        else update[e.key]=e.value.text.trim();
+      }
+      update['updatedAt']=FieldValue.serverTimestamp();
+      await FirebaseFirestore.instance.collection('users').doc(uid).update(update);
+      if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text(t('Registration request updated.','درخواست اپ ڈیٹ ہوگئی۔'))));
+    } catch(e) { if(mounted) setState(()=>error='$e'); }
+    finally { for(final c in fields.values){c.dispose();} }
+  }
+
+  Future<void> decide(String uid, String role) async {
+    if (busy) return;
     setState(() {
       busy = true;
       error = '';
@@ -1468,173 +1711,109 @@ class _UserApprovalsScreenState extends State<UserApprovalsScreen> {
           (await admin.getIdTokenResult(true)).claims?['admin'] != true) {
         throw StateError('Admin permission missing. Sign in again.');
       }
+
       final db = FirebaseFirestore.instance;
-      final userRef = db.collection('users').doc(uid);
-      final studentRef = db.collection('students').doc(uid);
-      final teacherRef = db.collection('teachers').doc(uid);
-      final idValues = <String>[];
-      if (role == 'student') idValues.addAll([sid, admission]);
-      if (role == 'teacher') idValues.add(tid);
-      final registryRefs = idValues
-          .map((v) => db.collection('idRegistry').doc(_normalId(v)))
-          .toList();
-
-      // Check existing profiles as well as the registry, so older records are included.
-      for (final value in idValues) {
-        for (final field in [
-          'schoolId',
-          'studentId',
-          'teacherId',
-          'admissionNo',
-        ]) {
-          final matches = await db
-              .collection('users')
-              .where(field, isEqualTo: value)
-              .limit(1)
-              .get();
-          if (matches.docs.any((d) => d.id != uid)) {
-            throw StateError(
-              t(
-                'ID already exists: $value',
-                'یہ آئی ڈی پہلے سے موجود ہے: $value',
-              ),
-            );
-          }
-        }
-        if (role == 'student') {
-          for (final field in ['studentId', 'admissionNo']) {
-            final matches = await db
-                .collection('students')
-                .where(field, isEqualTo: value)
-                .limit(1)
-                .get();
-            if (matches.docs.any((d) => d.id != uid)) {
-              throw StateError(
-                t(
-                  'ID already exists in student records: $value',
-                  'یہ آئی ڈی طلبہ کے ریکارڈ میں پہلے سے موجود ہے: $value',
-                ),
-              );
-            }
-          }
-        }
-        if (role == 'teacher') {
-          final matches = await db
-              .collection('teachers')
-              .where('teacherId', isEqualTo: value)
-              .limit(1)
-              .get();
-          if (matches.docs.any((d) => d.id != uid)) {
-            throw StateError(
-              t(
-                'Teacher ID already exists: $value',
-                'ٹیچر آئی ڈی پہلے سے موجود ہے: $value',
-              ),
-            );
-          }
-        }
+      final ref = db.collection('users').doc(uid);
+      final userSnapshot = await ref.get();
+      if (!userSnapshot.exists || userSnapshot.data()?['role'] != 'pending') {
+        throw StateError('This request is no longer pending.');
       }
-
-      await db.runTransaction((tx) async {
-        final fresh = await tx.get(userRef);
-        if (!fresh.exists || fresh.data()?['role'] != 'pending') {
-          throw StateError('This request is no longer pending.');
-        }
-        final registrySnapshots = <DocumentSnapshot<Map<String, dynamic>>>[];
-        for (final ref in registryRefs) {
-          registrySnapshots.add(await tx.get(ref));
-        }
-        if (registrySnapshots.any((d) => d.exists)) {
-          throw StateError(
-            t(
-              'One of these IDs is already registered. Check the IDs and try again.',
-              'ان میں سے کوئی آئی ڈی پہلے سے رجسٹر ہے۔ آئی ڈیز چیک کرکے دوبارہ کوشش کریں۔',
-            ),
-          );
-        }
-        final update = <String, dynamic>{
-          'role': role,
-          'approvalStatus': approved ? 'approved' : 'rejected',
-          'approvedAt': FieldValue.serverTimestamp(),
-          'approvedBy': admin.uid,
-          'rejectionReason': approved
-              ? FieldValue.delete()
-              : (decision['rejectionReason'] ?? ''),
-        };
-        if (role == 'student') {
-          update.addAll({
-            'studentId': sid,
-            'schoolId': sid,
-            'admissionNo': admission,
-            'className': className,
-            'cardIssuedAt': FieldValue.serverTimestamp(),
-          });
-        } else if (role == 'teacher') {
-          update.addAll({
-            'teacherId': tid,
-            'schoolId': tid,
-            'cardIssuedAt': FieldValue.serverTimestamp(),
-          });
-        }
-        tx.update(userRef, update);
-        for (int i = 0; i < registryRefs.length; i++) {
-          tx.set(registryRefs[i], {
-            'value': _normalId(idValues[i]),
-            'userId': uid,
-            'kind': role == 'student'
-                ? (i == 0 ? 'studentId' : 'admissionNo')
-                : 'teacherId',
-            'createdBy': admin.uid,
-            'createdAt': FieldValue.serverTimestamp(),
-          });
-        }
-        if (role == 'student') {
-          tx.set(studentRef, {
-            'userId': uid,
-            'name': applicant['name'] ?? '',
-            'studentId': sid,
-            'admissionNo': admission,
-            'className': className,
-            'guardianPhone': applicant['phone'] ?? '',
-            'guardianName': applicant['guardianName'] ?? '',
-            'createdBy': admin.uid,
-            'createdAt': FieldValue.serverTimestamp(),
-            'active': true,
-          }, SetOptions(merge: true));
-        } else if (role == 'teacher') {
-          tx.set(teacherRef, {
-            'userId': uid,
-            'name': applicant['name'] ?? '',
-            'teacherId': tid,
-            'email': applicant['email'] ?? '',
-            'phone': applicant['phone'] ?? '',
-            'qualification': applicant['educationOrClass'] ?? '',
-            'createdBy': admin.uid,
-            'createdAt': FieldValue.serverTimestamp(),
-            'active': true,
-          }, SetOptions(merge: true));
-        }
-      });
+      final current = userSnapshot.data()!;
+      final requested = (current['requestedRole'] ?? '').toString();
+      if (role != 'rejected' && requested.isNotEmpty && requested != role) {
+        throw StateError("Selected role does not match the requested role.");
+      }
+      String rejectionReason = '';
+      if (role == 'rejected') {
+        final controller = TextEditingController();
+        final reason = await showDialog<String>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: Text(t('Reject request', 'درخواست مسترد کریں')),
+            content: TextField(controller: controller, maxLines: 3, decoration: InputDecoration(labelText: t('Reason (required)', 'وجہ (لازمی)'))),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(dialogContext), child: Text(t('Cancel', 'واپس'))),
+              FilledButton(onPressed: () { final v = controller.text.trim(); if (v.isNotEmpty) Navigator.pop(dialogContext, v); }, child: Text(t('Reject', 'مسترد کریں'))),
+            ],
+          ),
+        );
+        controller.dispose();
+        if (reason == null || reason.trim().isEmpty) return;
+        rejectionReason = reason.trim();
+      }
+      final approved = role != 'rejected';
+      final functions = FirebaseFunctions.instanceFor(region: 'asia-south1');
+      final existingAdmission = (current['existingAdmissionNo'] ?? '').toString().trim();
+      final result = approved && role == 'student' && existingAdmission.isNotEmpty
+          ? await functions.httpsCallable('attachStudentAccount').call({'uid': uid, 'admissionNo': existingAdmission})
+          : approved
+              ? await functions.httpsCallable('approveAndIssueSchoolId').call({'uid': uid, 'role': role})
+              : await functions.httpsCallable('rejectSchoolRegistration').call({'uid': uid, 'reason': rejectionReason});
+      final resultData = Map<String, dynamic>.from(result.data as Map);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
             approved
-                ? t(
-                    'Account approved and records linked.',
-                    'اکاؤنٹ منظور اور ریکارڈ منسلک ہوگئے۔',
-                  )
-                : t('Application rejected.', 'درخواست مسترد ہوگئی۔'),
+                ? t('Account approved. ID: ${resultData['admissionNo'] ?? resultData['teacherId'] ?? resultData['parentId'] ?? ''}', 'اکاؤنٹ منظور ہوگیا۔ جاری کردہ آئی ڈی: ${resultData['admissionNo'] ?? resultData['teacherId'] ?? resultData['parentId'] ?? ''}')
+                : t('Account rejected.', 'اکاؤنٹ مسترد ہوگیا۔'),
           ),
         ),
       );
     } catch (e) {
-      if (mounted) {
-        setState(() => error = e.toString().replaceFirst('Bad state: ', ''));
-      }
+      if (mounted) setState(() => error = '$e');
     } finally {
       if (mounted) setState(() => busy = false);
     }
+  }
+
+  Future<void> review(String uid) async {
+    final role = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(t('Review account', 'اکاؤنٹ کا جائزہ')),
+        content: Text(
+          t(
+            'Choose the account role to approve, or reject this request.',
+            'منظوری کے لیے کردار منتخب کریں یا درخواست مسترد کریں۔',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, 'cancel'),
+            child: Text(t('Cancel', 'منسوخ')),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, 'rejected'),
+            child: Text(t('Reject', 'مسترد')),
+          ),
+          PopupMenuButton<String>(
+            tooltip: t('Approve as', 'اس حیثیت سے منظور کریں'),
+            onSelected: (value) => Navigator.pop(ctx, value),
+            itemBuilder: (_) => [
+              PopupMenuItem(
+                value: 'student',
+                child: Text(t('Student', 'طالب علم')),
+              ),
+              PopupMenuItem(
+                value: 'teacher',
+                child: Text(t('Teacher', 'استاد')),
+              ),
+              PopupMenuItem(
+                value: 'parent',
+                child: Text(t('Parent', 'والدین')),
+              ),
+            ],
+            child: Padding(
+              padding: const EdgeInsets.all(8),
+              child: Text(t('Approve as…', 'منظوری دیں…')),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (role == null || role == 'cancel' || !mounted) return;
+    await decide(uid, role);
   }
 
   @override
@@ -1660,34 +1839,18 @@ class _UserApprovalsScreenState extends State<UserApprovalsScreen> {
               ),
             );
           }
-          if (!snapshot.hasData) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator());
           }
-          final docs = snapshot.data!.docs;
+          final docs = snapshot.data?.docs ?? [];
           return ListView(
             padding: const EdgeInsets.all(12),
             children: [
               if (error.isNotEmpty)
                 Padding(
                   padding: const EdgeInsets.all(8),
-                  child: Text(
-                    error,
-                    style: TextStyle(
-                      color: Theme.of(context).colorScheme.error,
-                    ),
-                  ),
+                  child: Text(error, style: const TextStyle(color: Colors.red)),
                 ),
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Text(
-                    t(
-                      'Admin manually enters unique IDs. Student ID and Admission Number are separate. Approval also creates/updates the linked student or teacher record.',
-                      'ایڈمن منفرد آئی ڈیز خود درج کرے گا۔ طالب علم آئی ڈی اور داخلہ نمبر الگ ہیں۔ منظوری کے ساتھ منسلک طالب علم یا استاد کا ریکارڈ بھی بنتا/اپ ڈیٹ ہوتا ہے۔',
-                    ),
-                  ),
-                ),
-              ),
               if (docs.isEmpty)
                 Padding(
                   padding: const EdgeInsets.all(24),
@@ -1703,31 +1866,16 @@ class _UserApprovalsScreenState extends State<UserApprovalsScreen> {
               for (final doc in docs)
                 Card(
                   child: ListTile(
-                    title: Text(
-                      (doc.data()['name'] ?? doc.data()['email'] ?? doc.id)
-                          .toString(),
-                    ),
-                    subtitle: Text(
-                      '${doc.data()['requestedRole'] ?? 'pending'} • ${doc.data()['email'] ?? ''}\n${doc.data()['phone'] ?? ''} • UID: ${doc.id}',
-                    ),
+                    leading: const Icon(Icons.person_outline),
+                    title: Text((doc.data()['name'] ?? doc.data()['email'] ?? doc.id).toString()),
+                    subtitle: Text('Email: ${doc.data()['email'] ?? '-'}\nRole: ${doc.data()['requestedRole'] ?? '-'} | Phone: ${doc.data()['phone'] ?? '-'}\nDOB: ${doc.data()['dateOfBirth'] ?? '-'} | Gender: ${doc.data()['gender'] ?? '-'}\nAddress: ${doc.data()['address'] ?? '-'}\nStudent: Guardian ${doc.data()['guardianName'] ?? '-'} / ${doc.data()['guardianPhone'] ?? '-'} | Class ${doc.data()['currentClass'] ?? '-'}\nTeacher: ${doc.data()['qualification'] ?? '-'} | ${doc.data()['subjects'] ?? '-'} | ${doc.data()['experienceYears'] ?? 0} years\nParent: Child ${doc.data()['childAdmissionNo'] ?? '-'} | ${doc.data()['relationshipToStudent'] ?? '-'}\nExisting Student Admission: ${doc.data()['existingAdmissionNo'] ?? '-'}\nUID: ${doc.id}'),
                     isThreeLine: true,
-                    leading: CircleAvatar(
-                      backgroundImage:
-                          (doc.data()['photoUrl'] is String &&
-                              (doc.data()['photoUrl'] as String).isNotEmpty)
-                          ? NetworkImage(doc.data()['photoUrl'] as String)
-                          : null,
-                      child:
-                          (doc.data()['photoUrl'] is String &&
-                              (doc.data()['photoUrl'] as String).isNotEmpty)
-                          ? null
-                          : const Icon(Icons.person),
-                    ),
-                    trailing: IconButton(
-                      onPressed: busy ? null : () => review(doc.id),
-                      icon: const Icon(Icons.fact_check),
-                      tooltip: t('Review', 'جائزہ'),
-                    ),
+                    trailing: Wrap(mainAxisSize:MainAxisSize.min, children: [
+                      if ((doc.data()['photoUrl']??'').toString().isNotEmpty || (doc.data()['uploadedDocuments'] as List? ?? const []).isNotEmpty)
+                        IconButton(onPressed: busy ? null : () => showSubmittedDocuments(doc.data()), icon: const Icon(Icons.folder_open), tooltip:t('View document links','دستاویزات کے لنکس دیکھیں')),
+                      IconButton(onPressed: busy ? null : () => editRequest(doc.id, doc.data()), icon: const Icon(Icons.edit_outlined), tooltip:t('Edit request','درخواست میں ترمیم')),
+                      IconButton(onPressed: busy ? null : () => review(doc.id), icon: const Icon(Icons.fact_check), tooltip:t('Review','جائزہ')),
+                    ]),
                     onTap: busy ? null : () => review(doc.id),
                   ),
                 ),
@@ -1739,9 +1887,28 @@ class _UserApprovalsScreenState extends State<UserApprovalsScreen> {
   }
 }
 
-class AttendanceScreen extends StatefulWidget {
-  const AttendanceScreen({super.key, required this.urdu});
+class TeacherAttendanceEntry extends StatelessWidget {
+  const TeacherAttendanceEntry({super.key, required this.user, required this.urdu});
+  final User user;
   final bool urdu;
+
+  @override
+  Widget build(BuildContext context) => FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+    future: FirebaseFirestore.instance.collection('users').doc(user.uid).get(),
+    builder: (context, snapshot) {
+      if (snapshot.hasError) return Scaffold(appBar: AppBar(), body: const Center(child: Text('Could not load teacher profile.')));
+      if (!snapshot.hasData) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+      final teacherId = (snapshot.data!.data()?['teacherId'] ?? '').toString();
+      if (teacherId.isEmpty) return Scaffold(appBar: AppBar(), body: Center(child: Text(urdu ? 'استاد کی ID موجود نہیں۔' : 'Teacher ID is missing.')));
+      return AttendanceScreen(urdu: urdu, teacherId: teacherId);
+    },
+  );
+}
+
+class AttendanceScreen extends StatefulWidget {
+  const AttendanceScreen({super.key, required this.urdu, this.teacherId});
+  final bool urdu;
+  final String? teacherId;
 
   @override
   State<AttendanceScreen> createState() => _AttendanceScreenState();
@@ -1779,7 +1946,11 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
       error = '';
     });
     try {
-      final result = await attendance.where('date', isEqualTo: dateKey).get();
+      Query<Map<String, dynamic>> existingQuery = attendance.where('date', isEqualTo: dateKey);
+      if (widget.teacherId != null) {
+        existingQuery = existingQuery.where('markedBy', isEqualTo: FirebaseAuth.instance.currentUser!.uid);
+      }
+      final result = await existingQuery.get();
       final loaded = <String, String>{};
       for (final doc in result.docs) {
         final data = doc.data();
@@ -1864,7 +2035,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
         final recordData = <String, dynamic>{
           'studentId': doc.id,
           'studentName': data['name'] ?? '',
-          'admissionNo': data['admissionNo'] ?? '',
+          'admissionNo': data['admissionNo'] ?? data['existingAdmissionNo'] ?? '',
           'className': data['className'] ?? '',
           'date': dateKey,
           'status': statuses[doc.id],
@@ -1960,7 +2131,9 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
               ),
             ),
           StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-            stream: students.orderBy('name').snapshots(),
+            stream: (widget.teacherId == null
+                ? students.orderBy('name')
+                : students.where('teacherId', isEqualTo: widget.teacherId).orderBy('name')).snapshots(),
             builder: (context, snapshot) {
               if (snapshot.hasError) {
                 return Text(
@@ -2001,9 +2174,9 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                             ),
                             Text(
                               t(
-                                'Student ID: ${doc.data()['studentId'] ?? '-'} • Admission: ${doc.data()['admissionNo'] ?? '-'}'
+                                'Admission: ${doc.data()['admissionNo'] ?? '-'}'
                                     ' • Class: ${doc.data()['className'] ?? '-'}',
-                                'طالب علم آئی ڈی: ${doc.data()['studentId'] ?? '-'} • داخلہ: ${doc.data()['admissionNo'] ?? '-'}'
+                                'داخلہ: ${doc.data()['admissionNo'] ?? '-'}'
                                     ' • جماعت: ${doc.data()['className'] ?? '-'}',
                               ),
                             ),
@@ -2070,11 +2243,15 @@ class StudentsScreen extends StatefulWidget {
 class _StudentsScreenState extends State<StudentsScreen> {
   final formKey = GlobalKey<FormState>();
   final nameController = TextEditingController();
-  final studentIdController = TextEditingController();
-  final admissionController = TextEditingController();
   final classController = TextEditingController();
+  final guardianNameController = TextEditingController();
   final phoneController = TextEditingController();
+  final dobController = TextEditingController();
+  final addressController = TextEditingController();
+  final previousSchoolController = TextEditingController();
+  final teacherIdController = TextEditingController();
   final searchController = TextEditingController();
+  String gender = 'prefer_not_to_say';
 
   bool saving = false;
   String error = '';
@@ -2087,155 +2264,45 @@ class _StudentsScreenState extends State<StudentsScreen> {
   @override
   void dispose() {
     nameController.dispose();
-    studentIdController.dispose();
-    admissionController.dispose();
-    classController.dispose();
-    phoneController.dispose();
-    searchController.dispose();
+    classController.dispose(); guardianNameController.dispose();
+    phoneController.dispose(); dobController.dispose(); addressController.dispose();
+    previousSchoolController.dispose(); teacherIdController.dispose(); searchController.dispose();
     super.dispose();
   }
 
   Future<void> saveStudent() async {
     if (!formKey.currentState!.validate() || saving) return;
-    final studentId = studentIdController.text.trim();
-    final admissionNo = admissionController.text.trim();
-    final validId = RegExp(r'^[A-Za-z0-9_-]{2,30}$');
-    if (!validId.hasMatch(studentId) ||
-        !validId.hasMatch(admissionNo) ||
-        studentId.toUpperCase() == admissionNo.toUpperCase()) {
-      setState(
-        () => error = t(
-          'Enter different valid Student ID and Admission Number (2–30 letters/numbers, _ or -).',
-          'الگ الگ درست طالب علم آئی ڈی اور داخلہ نمبر درج کریں (2 تا 30 حروف/اعداد، _ یا -)۔',
-        ),
-      );
+    final dob = DateTime.tryParse(dobController.text.trim());
+    if (dob == null || !RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(dobController.text.trim()) || dob.isAfter(DateTime.now()) || addressController.text.trim().length < 5) {
+      setState(() => error = t('Enter a valid date of birth and complete address.', 'درست تاریخِ پیدائش اور مکمل پتہ درج کریں۔'));
       return;
     }
-    setState(() {
-      saving = true;
-      error = '';
-    });
+    setState(() { saving = true; error = ''; });
     try {
-      final db = FirebaseFirestore.instance;
-      final normalizedStudentId = studentId.toUpperCase();
-      final normalizedAdmission = admissionNo.toUpperCase();
-      for (final value in [studentId, admissionNo]) {
-        for (final field in [
-          'studentId',
-          'admissionNo',
-          'schoolId',
-          'teacherId',
-        ]) {
-          final matches = await db
-              .collection('users')
-              .where(field, isEqualTo: value)
-              .limit(1)
-              .get();
-          if (matches.docs.isNotEmpty) {
-            throw StateError(
-              t(
-                'This ID already exists: $value',
-                'یہ آئی ڈی پہلے سے موجود ہے: $value',
-              ),
-            );
-          }
-        }
-        for (final field in ['studentId', 'admissionNo']) {
-          final matches = await students
-              .where(field, isEqualTo: value)
-              .limit(1)
-              .get();
-          if (matches.docs.isNotEmpty) {
-            throw StateError(
-              t(
-                'This ID already exists: $value',
-                'یہ آئی ڈی پہلے سے موجود ہے: $value',
-              ),
-            );
-          }
-        }
-      }
-      final studentRef = students.doc();
-      final registryRefs = [
-        db.collection('idRegistry').doc(normalizedStudentId),
-        db.collection('idRegistry').doc(normalizedAdmission),
-      ];
-      final adminUid = FirebaseAuth.instance.currentUser!.uid;
-      await db.runTransaction((tx) async {
-        final a = await tx.get(registryRefs[0]);
-        final b = await tx.get(registryRefs[1]);
-        if (a.exists || b.exists) {
-          throw StateError(
-            t(
-              'One of these IDs is already registered.',
-              'ان میں سے کوئی آئی ڈی پہلے سے رجسٹر ہے۔',
-            ),
-          );
-        }
-        tx.set(studentRef, {
-          'name': nameController.text.trim(),
-          'studentId': studentId,
-          'admissionNo': admissionNo,
-          'className': classController.text.trim(),
-          'guardianPhone': phoneController.text.trim(),
-          'createdAt': FieldValue.serverTimestamp(),
-          'createdBy': adminUid,
-          'active': true,
-        });
-        tx.set(registryRefs[0], {
-          'value': normalizedStudentId,
-          'kind': 'studentId',
-          'studentDocId': studentRef.id,
-          'createdBy': adminUid,
-          'createdAt': FieldValue.serverTimestamp(),
-        });
-        tx.set(registryRefs[1], {
-          'value': normalizedAdmission,
-          'kind': 'admissionNo',
-          'studentDocId': studentRef.id,
-          'createdBy': adminUid,
-          'createdAt': FieldValue.serverTimestamp(),
-        });
+      final result = await FirebaseFunctions.instanceFor(region: 'asia-south1').httpsCallable('createStudentRecord').call({
+        'name':nameController.text.trim(), 'className':classController.text.trim(),
+        'guardianName':guardianNameController.text.trim(), 'guardianPhone':phoneController.text.trim(),
+        'dateOfBirth':dobController.text.trim(), 'gender':gender, 'address':addressController.text.trim(),
+        'previousSchool':previousSchoolController.text.trim(), 'teacherId':teacherIdController.text.trim(),
       });
-      nameController.clear();
-      studentIdController.clear();
-      admissionController.clear();
-      classController.clear();
-      phoneController.clear();
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              t('Student saved.', 'طالب علم کا ریکارڈ محفوظ ہوگیا۔'),
-            ),
-          ),
-        );
-      }
-    } on FirebaseException catch (e) {
-      if (mounted) {
-        setState(
-          () => error = t(
-            'Could not save. Check Firestore permissions (${e.code}).',
-            'ریکارڈ محفوظ نہیں ہوا۔ Firestore اجازتیں چیک کریں (${e.code})۔',
-          ),
-        );
-      }
+      final data = Map<String,dynamic>.from(result.data as Map);
+      nameController.clear(); classController.clear(); guardianNameController.clear(); phoneController.clear();
+      dobController.clear(); addressController.clear(); previousSchoolController.clear(); teacherIdController.clear();
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(t('Student created. Admission No: ${data['admissionNo']}', 'طالب علم کا ریکارڈ بن گیا۔ داخلہ نمبر: ${data['admissionNo']}'))));
+    } on FirebaseFunctionsException catch (e) {
+      setState(() => error = t('Could not create student (${e.code}): ${e.message ?? ''}', 'طالب علم کا ریکارڈ نہیں بنا (${e.code})'));
     } catch (e) {
-      if (mounted) {
-        setState(() => error = e.toString().replaceFirst('Bad state: ', ''));
-      }
-    } finally {
-      if (mounted) setState(() => saving = false);
-    }
+      setState(() => error = t('Could not create student: $e', 'طالب علم کا ریکارڈ نہیں بنا: $e'));
+    } finally { if (mounted) setState(() => saving = false); }
   }
 
   Future<void> deleteStudent(String id) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text(t('Delete student?', 'طالب علم کا ریکارڈ حذف کریں؟')),
+        title: Text(t('Deactivate student?', 'طالب علم کو غیر فعال کریں؟')),
         content: Text(
-          t('This action cannot be undone.', 'یہ عمل واپس نہیں ہوسکے گا۔'),
+          t('The student account will be suspended if linked. Historical school records will be preserved.', 'اگر اکاؤنٹ منسلک ہے تو معطل ہوگا۔ سابقہ اسکول ریکارڈ محفوظ رہے گا۔'),
         ),
         actions: [
           TextButton(
@@ -2244,7 +2311,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            child: Text(t('Delete', 'حذف کریں')),
+            child: Text(t('Deactivate', 'غیر فعال کریں')),
           ),
         ],
       ),
@@ -2253,48 +2320,23 @@ class _StudentsScreenState extends State<StudentsScreen> {
     if (confirmed != true) return;
 
     try {
-      final db = FirebaseFirestore.instance;
-      final ref = students.doc(id);
-      final snap = await ref.get();
-      final data = snap.data() ?? <String, dynamic>{};
-      if ((data['userId'] ?? '').toString().isNotEmpty) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                t(
-                  'This record is linked to a login account; do not delete it here.',
-                  'یہ ریکارڈ لاگ اِن اکاؤنٹ سے منسلک ہے؛ اسے یہاں حذف نہ کریں۔',
-                ),
-              ),
-            ),
-          );
+      final studentRef = students.doc(id);
+      final studentSnap = await studentRef.get();
+      final linkedUid = (studentSnap.data()?['linkedUserUid'] ?? '').toString();
+      await FirebaseFirestore.instance.runTransaction((tx) async {
+        final userRef = linkedUid.isEmpty ? null : FirebaseFirestore.instance.collection('users').doc(linkedUid);
+        final userSnap = userRef == null ? null : await tx.get(userRef);
+        tx.update(studentRef, {'status':'inactive','deactivatedAt':FieldValue.serverTimestamp(),'updatedAt':FieldValue.serverTimestamp()});
+        if (userRef != null && userSnap != null && userSnap.exists) {
+          tx.update(userRef, {'approvalStatus':'suspended','suspendedAt':FieldValue.serverTimestamp(),'updatedAt':FieldValue.serverTimestamp()});
         }
-        return;
-      }
-      final studentKey = (data['studentId'] ?? '')
-          .toString()
-          .trim()
-          .toUpperCase();
-      final admissionKey = (data['admissionNo'] ?? '')
-          .toString()
-          .trim()
-          .toUpperCase();
-      await db.runTransaction((tx) async {
-        if (studentKey.isNotEmpty) {
-          tx.delete(db.collection('idRegistry').doc(studentKey));
-        }
-        if (admissionKey.isNotEmpty) {
-          tx.delete(db.collection('idRegistry').doc(admissionKey));
-        }
-        tx.delete(ref);
       });
     } on FirebaseException catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              t('Delete failed: ${e.code}', 'حذف نہیں ہوسکا: ${e.code}'),
+              t('Deactivation failed: ${e.code}', 'حذف نہیں ہوسکا: ${e.code}'),
             ),
           ),
         );
@@ -2335,35 +2377,6 @@ class _StudentsScreenState extends State<StudentsScreen> {
                     ),
                     const SizedBox(height: 12),
                     TextFormField(
-                      controller: studentIdController,
-                      decoration: InputDecoration(
-                        labelText: t('Student ID *', 'طالب علم آئی ڈی *'),
-                      ),
-                      validator: (v) => (v == null || v.trim().isEmpty)
-                          ? t(
-                              'Enter a Student ID.',
-                              'طالب علم آئی ڈی درج کریں۔',
-                            )
-                          : null,
-                    ),
-                    const SizedBox(height: 12),
-                    TextFormField(
-                      controller: admissionController,
-                      decoration: InputDecoration(
-                        labelText: t(
-                          'Admission number * (separate)',
-                          'داخلہ نمبر * (الگ)',
-                        ),
-                      ),
-                      validator: (v) => (v == null || v.trim().isEmpty)
-                          ? t(
-                              'Enter an admission number.',
-                              'داخلہ نمبر درج کریں۔',
-                            )
-                          : null,
-                    ),
-                    const SizedBox(height: 12),
-                    TextFormField(
                       controller: classController,
                       decoration: InputDecoration(
                         labelText: t('Class / grade *', 'جماعت *'),
@@ -2373,16 +2386,13 @@ class _StudentsScreenState extends State<StudentsScreen> {
                           : null,
                     ),
                     const SizedBox(height: 12),
-                    TextFormField(
-                      controller: phoneController,
-                      keyboardType: TextInputType.phone,
-                      decoration: InputDecoration(
-                        labelText: t(
-                          'Parent/guardian phone',
-                          'والدین/سرپرست کا فون',
-                        ),
-                      ),
-                    ),
+                    TextFormField(controller: guardianNameController, decoration: InputDecoration(labelText: t('Guardian full name *','سرپرست کا مکمل نام *')), validator: (v) => (v??'').trim().length < 2 ? t('Enter guardian name.','سرپرست کا نام درج کریں۔') : null),
+                    TextFormField(controller: phoneController, keyboardType: TextInputType.phone, decoration: InputDecoration(labelText: t('Parent/guardian phone *','والدین/سرپرست کا فون *')), validator: (v) => (v??'').trim().isEmpty ? t('Enter guardian phone.','سرپرست کا فون درج کریں۔') : null),
+                    TextFormField(controller: dobController, decoration: InputDecoration(labelText: t('Date of birth (YYYY-MM-DD) *','تاریخِ پیدائش (YYYY-MM-DD) *'))),
+                    DropdownButtonFormField<String>(value: gender, decoration: InputDecoration(labelText: t('Gender','جنس')), items: [DropdownMenuItem(value:'male',child:Text(t('Male','مرد'))),DropdownMenuItem(value:'female',child:Text(t('Female','عورت'))),DropdownMenuItem(value:'other',child:Text(t('Other','دیگر'))),DropdownMenuItem(value:'prefer_not_to_say',child:Text(t('Prefer not to say','بتانا نہیں چاہتے')))], onChanged:(v){if(v!=null)setState(()=>gender=v);}),
+                    TextFormField(controller: addressController, maxLines:2, decoration: InputDecoration(labelText: t('Residential address *','رہائشی پتہ *'))),
+                    TextFormField(controller: previousSchoolController, decoration: InputDecoration(labelText: t('Previous school (optional)','پچھلا اسکول (اختیاری)'))),
+                    TextFormField(controller: teacherIdController, decoration: InputDecoration(labelText: t('Assigned Teacher ID (optional)','مقررہ ٹیچر آئی ڈی (اختیاری)'))),
                     if (error.isNotEmpty) ...[
                       const SizedBox(height: 10),
                       Text(
@@ -2402,7 +2412,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
                               child: CircularProgressIndicator(strokeWidth: 2),
                             )
                           : const Icon(Icons.save),
-                      label: Text(t('Save student', 'ریکارڈ محفوظ کریں')),
+                      label: Text(t('Create student and issue Admission No', 'طالب علم بنائیں اور داخلہ نمبر جاری کریں')),
                     ),
                   ],
                 ),
@@ -2472,7 +2482,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
                       ),
                       isThreeLine: true,
                       trailing: IconButton(
-                        tooltip: t('Delete', 'حذف کریں'),
+                        tooltip: t('Deactivate', 'غیر فعال کریں'),
                         icon: const Icon(Icons.delete_outline),
                         onPressed: () => deleteStudent(doc.id),
                       ),
@@ -2483,687 +2493,6 @@ class _StudentsScreenState extends State<StudentsScreen> {
             },
           ),
         ],
-      ),
-    );
-  }
-}
-
-class ProfileCardScreen extends StatelessWidget {
-  const ProfileCardScreen({super.key, required this.user, required this.urdu});
-  final User user;
-  final bool urdu;
-
-  @override
-  Widget build(BuildContext context) {
-    final db = FirebaseFirestore.instance.collection('users').doc(user.uid);
-    String t(String en, String ur) => urdu ? ur : en;
-
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(t('My Profile & ID Card', 'میرا پروفائل اور شناختی کارڈ')),
-      ),
-      body: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-        stream: db.snapshots(),
-        builder: (context, snapshot) {
-          if (snapshot.hasError) {
-            return Center(
-              child: Text(
-                t('Could not load profile.', 'پروفائل نہیں کھل سکا۔'),
-              ),
-            );
-          }
-          if (!snapshot.hasData) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          if (!snapshot.data!.exists) {
-            return Center(
-              child: Text(
-                t('Profile record not found.', 'پروفائل ریکارڈ نہیں ملا۔'),
-              ),
-            );
-          }
-
-          final d = snapshot.data!.data() ?? <String, dynamic>{};
-          final photo = (d['photoUrl'] ?? '').toString();
-          final role = (d['role'] ?? 'pending').toString();
-          final id =
-              (role == 'student'
-                      ? (d['studentId'] ??
-                            d['schoolId'] ??
-                            t('Pending approval', 'منظوری کا انتظار'))
-                      : role == 'teacher'
-                      ? (d['teacherId'] ??
-                            d['schoolId'] ??
-                            t('Pending approval', 'منظوری کا انتظار'))
-                      : role == 'parent'
-                      ? t(
-                          'No ID assigned to parent',
-                          'والدین کو آئی ڈی جاری نہیں ہوتی',
-                        )
-                      : t('Pending approval', 'منظوری کا انتظار'))
-                  .toString();
-
-          return ListView(
-            padding: const EdgeInsets.all(16),
-            children: [
-              Card(
-                elevation: 2,
-                child: Padding(
-                  padding: const EdgeInsets.all(20),
-                  child: Column(
-                    children: [
-                      CircleAvatar(
-                        radius: 48,
-                        backgroundImage: photo.isNotEmpty
-                            ? NetworkImage(photo)
-                            : null,
-                        child: photo.isEmpty
-                            ? const Icon(Icons.person, size: 48)
-                            : null,
-                      ),
-                      const SizedBox(height: 12),
-                      Text(
-                        (d['name'] ?? user.email ?? 'SchoolPro User')
-                            .toString(),
-                        style: Theme.of(context).textTheme.titleLarge,
-                        textAlign: TextAlign.center,
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        id,
-                        style: Theme.of(context).textTheme.headlineSmall
-                            ?.copyWith(
-                              fontWeight: FontWeight.bold,
-                              color: Theme.of(context).colorScheme.primary,
-                            ),
-                        textAlign: TextAlign.center,
-                      ),
-                      Text(
-                        t(
-                          'Digital school identity card',
-                          'ڈیجیٹل اسکول شناختی کارڈ',
-                        ),
-                      ),
-                      const Divider(height: 28),
-                      _profileRow(context, t('Role', 'کردار'), role),
-                      _profileRow(
-                        context,
-                        t('Email', 'ای میل'),
-                        (d['email'] ?? user.email ?? '').toString(),
-                      ),
-                      _profileRow(
-                        context,
-                        t('Phone', 'فون'),
-                        (d['phone'] ?? '-').toString(),
-                      ),
-                      _profileRow(
-                        context,
-                        t('Guardian', 'سرپرست'),
-                        (d['guardianName'] ?? '-').toString(),
-                      ),
-                      _profileRow(
-                        context,
-                        t('Address', 'پتہ'),
-                        (d['address'] ?? '-').toString(),
-                      ),
-                      if (role == 'student') ...[
-                        _profileRow(
-                          context,
-                          t('Student ID', 'طالب علم آئی ڈی'),
-                          (d['studentId'] ?? d['schoolId'] ?? '-').toString(),
-                        ),
-                        _profileRow(
-                          context,
-                          t('Admission Number', 'داخلہ نمبر'),
-                          (d['admissionNo'] ?? '-').toString(),
-                        ),
-                        _profileRow(
-                          context,
-                          t('Class / grade', 'کلاس / جماعت'),
-                          (d['className'] ?? d['educationOrClass'] ?? '-')
-                              .toString(),
-                        ),
-                      ],
-                      if (role == 'teacher')
-                        _profileRow(
-                          context,
-                          t('Teacher ID', 'ٹیچر آئی ڈی'),
-                          (d['teacherId'] ?? d['schoolId'] ?? '-').toString(),
-                        ),
-                      _profileRow(
-                        context,
-                        t('Class / qualification', 'کلاس / قابلیت'),
-                        (d['educationOrClass'] ?? '-').toString(),
-                      ),
-                      _profileRow(
-                        context,
-                        t('Approval status', 'منظوری کی حالت'),
-                        (d['approvalStatus'] ?? 'pending').toString(),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 16),
-              FilledButton.icon(
-                icon: const Icon(Icons.edit_outlined),
-                label: Text(t('Edit profile', 'پروفائل میں ترمیم کریں')),
-                onPressed: () async {
-                  await showDialog<void>(
-                    context: context,
-                    builder: (_) => ProfileEditDialog(
-                      user: user,
-                      urdu: urdu,
-                      initialData: d,
-                    ),
-                  );
-                },
-              ),
-              const SizedBox(height: 8),
-              Text(
-                t(
-                  'Your role, approval status and school ID are managed by the school administration.',
-                  'آپ کا کردار، منظوری کی حالت اور اسکول شناختی نمبر انتظامیہ کے زیرِ انتظام ہیں۔',
-                ),
-                textAlign: TextAlign.center,
-              ),
-            ],
-          );
-        },
-      ),
-    );
-  }
-
-  Widget _profileRow(BuildContext context, String label, String value) =>
-      Padding(
-        padding: const EdgeInsets.symmetric(vertical: 5),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SizedBox(
-              width: 120,
-              child: Text(
-                label,
-                style: const TextStyle(fontWeight: FontWeight.w600),
-              ),
-            ),
-            Expanded(child: Text(value)),
-          ],
-        ),
-      );
-}
-
-class ProfileEditDialog extends StatefulWidget {
-  const ProfileEditDialog({
-    super.key,
-    required this.user,
-    required this.urdu,
-    required this.initialData,
-  });
-
-  final User user;
-  final bool urdu;
-  final Map<String, dynamic> initialData;
-
-  @override
-  State<ProfileEditDialog> createState() => _ProfileEditDialogState();
-}
-
-class _ProfileEditDialogState extends State<ProfileEditDialog> {
-  late final TextEditingController nameController;
-  late final TextEditingController phoneController;
-  late final TextEditingController guardianController;
-  late final TextEditingController addressController;
-  late final TextEditingController classController;
-
-  XFile? newPhoto;
-  bool saving = false;
-  String error = '';
-
-  String t(String en, String ur) => widget.urdu ? ur : en;
-
-  @override
-  void initState() {
-    super.initState();
-    final d = widget.initialData;
-    nameController = TextEditingController(text: (d['name'] ?? '').toString());
-    phoneController = TextEditingController(
-      text: (d['phone'] ?? '').toString(),
-    );
-    guardianController = TextEditingController(
-      text: (d['guardianName'] ?? '').toString(),
-    );
-    addressController = TextEditingController(
-      text: (d['address'] ?? '').toString(),
-    );
-    classController = TextEditingController(
-      text: (d['educationOrClass'] ?? '').toString(),
-    );
-  }
-
-  @override
-  void dispose() {
-    nameController.dispose();
-    phoneController.dispose();
-    guardianController.dispose();
-    addressController.dispose();
-    classController.dispose();
-    super.dispose();
-  }
-
-  Future<void> choosePhoto() async {
-    try {
-      final picked = await ImagePicker().pickImage(
-        source: ImageSource.gallery,
-        imageQuality: 82,
-        maxWidth: 1200,
-      );
-      if (picked != null && mounted) {
-        setState(() {
-          newPhoto = picked;
-          error = '';
-        });
-      }
-    } catch (_) {
-      if (mounted) {
-        setState(() {
-          error = t(
-            'Could not select the image. Check gallery permissions.',
-            'تصویر منتخب نہیں ہو سکی۔ گیلری کی اجازت چیک کریں۔',
-          );
-        });
-      }
-    }
-  }
-
-  Future<void> saveProfile() async {
-    if (saving) return;
-
-    final name = nameController.text.trim();
-    final phone = phoneController.text.trim();
-    if (name.length < 2 || phone.length < 7) {
-      setState(
-        () => error = t(
-          'Enter a valid name and phone number (at least 7 digits).',
-          'درست نام اور فون نمبر درج کریں (کم از کم 7 ہندسے)۔',
-        ),
-      );
-      return;
-    }
-
-    setState(() {
-      saving = true;
-      error = '';
-    });
-
-    try {
-      final uid = widget.user.uid;
-      final updates = <String, dynamic>{
-        'name': name,
-        'phone': phone,
-        'guardianName': guardianController.text.trim(),
-        'address': addressController.text.trim(),
-        'educationOrClass': classController.text.trim(),
-        'updatedAt': FieldValue.serverTimestamp(),
-      };
-
-      if (newPhoto != null) {
-        final ref = FirebaseStorage.instance.ref(
-          'profileApplications/$uid/profile.jpg',
-        );
-        await ref.putData(
-          await newPhoto!.readAsBytes(),
-          SettableMetadata(contentType: 'image/jpeg'),
-        );
-        updates['photoUrl'] = await ref.getDownloadURL();
-      }
-
-      await FirebaseFirestore.instance
-          .collection('users')
-          .doc(uid)
-          .update(updates);
-
-      if (!mounted) return;
-      Navigator.of(context).pop();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            t('Profile saved successfully.', 'پروفائل کامیابی سے محفوظ ہوگیا۔'),
-          ),
-        ),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        error = t(
-          'Could not save profile. Check internet and Firebase permissions, then try again.',
-          'پروفائل محفوظ نہیں ہو سکا۔ انٹرنیٹ اور Firebase اجازتیں چیک کرکے دوبارہ کوشش کریں۔',
-        );
-      });
-      debugPrint('SCHOOLPRO PROFILE SAVE ERROR: $e');
-    } finally {
-      if (mounted) setState(() => saving = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: Text(t('Edit profile', 'پروفائل میں ترمیم')),
-      content: SizedBox(
-        width: 480,
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              OutlinedButton.icon(
-                onPressed: saving ? null : choosePhoto,
-                icon: const Icon(Icons.add_a_photo_outlined),
-                label: Text(
-                  newPhoto == null
-                      ? t('Choose profile photo', 'پروفائل تصویر منتخب کریں')
-                      : t('New photo selected', 'نئی تصویر منتخب ہوگئی'),
-                ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: nameController,
-                textCapitalization: TextCapitalization.words,
-                decoration: InputDecoration(
-                  labelText: t('Full name *', 'مکمل نام *'),
-                ),
-              ),
-              const SizedBox(height: 10),
-              TextField(
-                controller: phoneController,
-                keyboardType: TextInputType.phone,
-                decoration: InputDecoration(
-                  labelText: t('Phone number *', 'فون نمبر *'),
-                ),
-              ),
-              const SizedBox(height: 10),
-              TextField(
-                controller: guardianController,
-                decoration: InputDecoration(
-                  labelText: t('Parent / guardian', 'والد / سرپرست'),
-                ),
-              ),
-              const SizedBox(height: 10),
-              TextField(
-                controller: addressController,
-                maxLines: 2,
-                decoration: InputDecoration(
-                  labelText: t('Home address', 'گھر کا پتہ'),
-                ),
-              ),
-              const SizedBox(height: 10),
-              TextField(
-                controller: classController,
-                decoration: InputDecoration(
-                  labelText: t('Class / qualification', 'کلاس / قابلیت'),
-                ),
-              ),
-              if (error.isNotEmpty) ...[
-                const SizedBox(height: 12),
-                Text(
-                  error,
-                  style: TextStyle(color: Theme.of(context).colorScheme.error),
-                ),
-              ],
-            ],
-          ),
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: saving ? null : () => Navigator.of(context).pop(),
-          child: Text(t('Cancel', 'منسوخ')),
-        ),
-        FilledButton(
-          onPressed: saving ? null : saveProfile,
-          child: saving
-              ? const SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : Text(t('Save changes', 'تبدیلیاں محفوظ کریں')),
-        ),
-      ],
-    );
-  }
-}
-
-class SchoolDataModuleScreen extends StatefulWidget {
-  const SchoolDataModuleScreen({
-    super.key,
-    required this.collectionName,
-    required this.titleEn,
-    required this.titleUr,
-    required this.role,
-    required this.urdu,
-  });
-  final String collectionName, titleEn, titleUr, role;
-  final bool urdu;
-  @override
-  State<SchoolDataModuleScreen> createState() => _SchoolDataModuleScreenState();
-}
-
-class _SchoolDataModuleScreenState extends State<SchoolDataModuleScreen> {
-  final titleController = TextEditingController();
-  final detailsController = TextEditingController();
-  final classController = TextEditingController();
-  final amountController = TextEditingController();
-  bool saving = false;
-  String error = '';
-  String t(String en, String ur) => widget.urdu ? ur : en;
-  bool get canCreate => widget.role == 'admin' || widget.role == 'teacher';
-
-  @override
-  void dispose() {
-    titleController.dispose();
-    detailsController.dispose();
-    classController.dispose();
-    amountController.dispose();
-    super.dispose();
-  }
-
-  Future<void> save() async {
-    if (titleController.text.trim().isEmpty || saving) {
-      setState(() => error = t('Title is required.', 'عنوان ضروری ہے۔'));
-      return;
-    }
-    setState(() {
-      saving = true;
-      error = '';
-    });
-    try {
-      await FirebaseFirestore.instance.collection(widget.collectionName).add({
-        'title': titleController.text.trim(),
-        'details': detailsController.text.trim(),
-        'className': classController.text.trim(),
-        if (amountController.text.trim().isNotEmpty)
-          'amount': double.tryParse(amountController.text.trim()) ?? 0,
-        'createdBy': FirebaseAuth.instance.currentUser!.uid,
-        'createdAt': FieldValue.serverTimestamp(),
-        'active': true,
-      });
-      titleController.clear();
-      detailsController.clear();
-      classController.clear();
-      amountController.clear();
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(t('Record published.', 'ریکارڈ شائع ہوگیا۔'))),
-        );
-      }
-    } on FirebaseException catch (e) {
-      if (mounted) {
-        setState(
-          () =>
-              error = t('Save failed: ${e.code}', 'محفوظ نہیں ہوا: ${e.code}'),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => saving = false);
-    }
-  }
-
-  Future<void> remove(String id) async {
-    try {
-      await FirebaseFirestore.instance
-          .collection(widget.collectionName)
-          .doc(id)
-          .delete();
-    } on FirebaseException catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Delete failed: ${e.code}')));
-      }
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final title = widget.urdu ? widget.titleUr : widget.titleEn;
-    return Scaffold(
-      appBar: AppBar(title: Text(title)),
-      body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-        stream: FirebaseFirestore.instance
-            .collection(widget.collectionName)
-            .orderBy('createdAt', descending: true)
-            .snapshots(),
-        builder: (context, snapshot) {
-          if (snapshot.hasError) {
-            return Center(
-              child: Padding(
-                padding: const EdgeInsets.all(20),
-                child: Text(
-                  t(
-                    'Unable to load records. Confirm the Firestore rules are deployed and your role has access.',
-                    'ریکارڈ نہیں کھل سکے۔ Firestore Rules اور کردار کی اجازت چیک کریں۔',
-                  ),
-                ),
-              ),
-            );
-          }
-          if (!snapshot.hasData) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          final docs = snapshot.data!.docs;
-          return ListView(
-            padding: const EdgeInsets.all(16),
-            children: [
-              if (canCreate)
-                Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(14),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Text(
-                          t('Create new record', 'نیا ریکارڈ بنائیں'),
-                          style: Theme.of(context).textTheme.titleMedium,
-                        ),
-                        const SizedBox(height: 10),
-                        TextField(
-                          controller: titleController,
-                          decoration: InputDecoration(
-                            labelText: t('Title *', 'عنوان *'),
-                          ),
-                        ),
-                        const SizedBox(height: 10),
-                        TextField(
-                          controller: detailsController,
-                          maxLines: 3,
-                          decoration: InputDecoration(
-                            labelText: t(
-                              'Details / instructions',
-                              'تفصیل / ہدایات',
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 10),
-                        TextField(
-                          controller: classController,
-                          decoration: InputDecoration(
-                            labelText: t('Class (optional)', 'کلاس (اختیاری)'),
-                          ),
-                        ),
-                        if (widget.collectionName == 'fees') ...[
-                          const SizedBox(height: 10),
-                          TextField(
-                            controller: amountController,
-                            keyboardType: const TextInputType.numberWithOptions(
-                              decimal: true,
-                            ),
-                            decoration: InputDecoration(
-                              labelText: t('Amount (PKR)', 'رقم (روپے)'),
-                            ),
-                          ),
-                        ],
-                        if (error.isNotEmpty)
-                          Text(
-                            error,
-                            style: TextStyle(
-                              color: Theme.of(context).colorScheme.error,
-                            ),
-                          ),
-                        const SizedBox(height: 10),
-                        FilledButton.icon(
-                          onPressed: saving ? null : save,
-                          icon: const Icon(Icons.publish),
-                          label: Text(
-                            saving
-                                ? t('Saving…', 'محفوظ ہو رہا ہے…')
-                                : t('Publish / Save', 'شائع / محفوظ کریں'),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              if (docs.isEmpty)
-                Padding(
-                  padding: const EdgeInsets.all(24),
-                  child: Text(
-                    t(
-                      'No records have been published yet.',
-                      'ابھی کوئی ریکارڈ شائع نہیں ہوا۔',
-                    ),
-                    textAlign: TextAlign.center,
-                  ),
-                ),
-              for (final doc in docs)
-                Card(
-                  child: ListTile(
-                    leading: Icon(
-                      widget.collectionName == 'announcements'
-                          ? Icons.notifications_active_outlined
-                          : Icons.article_outlined,
-                    ),
-                    title: Text(
-                      (doc.data()['title'] ??
-                              doc.data()['name'] ??
-                              doc.data()['teacherId'] ??
-                              '')
-                          .toString(),
-                    ),
-                    subtitle: Text(
-                      '${doc.data()['details'] ?? doc.data()['qualification'] ?? ''}${doc.data()['className'] == null || (doc.data()['className'] as String).isEmpty ? '' : '\nClass: ${doc.data()['className']}'}${doc.data()['teacherId'] == null ? '' : '\nTeacher ID: ${doc.data()['teacherId']}'}${doc.data()['email'] == null ? '' : '\n${doc.data()['email']}'}${doc.data()['phone'] == null ? '' : '\n${doc.data()['phone']}'}${doc.data()['amount'] == null ? '' : '\nPKR ${doc.data()['amount']}'}',
-                    ),
-                    isThreeLine: true,
-                    trailing: widget.role == 'admin'
-                        ? IconButton(
-                            icon: const Icon(Icons.delete_outline),
-                            onPressed: () => remove(doc.id),
-                          )
-                        : null,
-                  ),
-                ),
-            ],
-          );
-        },
       ),
     );
   }

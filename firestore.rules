@@ -3,118 +3,293 @@ service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() { return request.auth != null; }
     function isAdmin() { return signedIn() && request.auth.token.admin == true; }
-    function userData(uid) { return get(/databases/$(database)/documents/users/$(uid)).data; }
-    function isApprovedRole(role) {
-      return signedIn() && userData(request.auth.uid).role == role
-        && userData(request.auth.uid).approvalStatus == 'approved';
+    function owns(uid) { return signedIn() && request.auth.uid == uid; }
+    function hasProfile() {
+      return signedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid));
     }
-    function isStaff() { return isAdmin() || isApprovedRole('teacher'); }
-    function validString(value, max) { return value is string && value.size() <= max; }
+    function profile() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+    function approvedRole(role) {
+      return hasProfile() && profile().role == role && profile().approvalStatus == 'approved';
+    }
+    function activeSchoolUser() {
+      return hasProfile()
+        && profile().approvalStatus == 'approved'
+        && profile().role in ['student', 'teacher', 'parent'];
+    }
+    function studentRecordMatches(studentId) {
+      return activeSchoolUser()
+        && exists(/databases/$(database)/documents/students/$(studentId))
+        && (
+          (profile().role == 'student' && (studentId == request.auth.uid || ('linkedStudentId' in profile() && studentId == profile().linkedStudentId)))
+          || (profile().role == 'parent' && (studentId == profile().linkedStudentId || (profile().linkedStudentIds is list && studentId in profile().linkedStudentIds)))
+        );
+    }
+    function classMatchesUser() {
+      return activeSchoolUser()
+        && profile().role in ['student', 'parent']
+        && (resource.data.className == profile().currentClass || resource.data.name == profile().currentClass
+          || (profile().linkedStudentClasses is list && (resource.data.className in profile().linkedStudentClasses || resource.data.name in profile().linkedStudentClasses)));
+    }
+    function teacherOwnsRecord() {
+      return approvedRole('teacher')
+        && resource.data.teacherId == profile().teacherId;
+    }
+    function teacherOwnsClass() {
+      return approvedRole('teacher')
+        && resource.data.classTeacherId == profile().teacherId;
+    }
+    function teacherMarkedAttendance() {
+      return approvedRole('teacher')
+        && resource.data.markedBy == request.auth.uid;
+    }
+    function teacherAssignedStudent(studentId) {
+      return approvedRole('teacher')
+        && exists(/databases/$(database)/documents/students/$(studentId))
+        && get(/databases/$(database)/documents/students/$(studentId)).data.teacherId == profile().teacherId;
+    }
+    function validTeacherAttendancePayload() {
+      return teacherAssignedStudent(request.resource.data.studentId)
+        && request.resource.data.markedBy == request.auth.uid
+        && request.resource.data.status in ['Present', 'Absent', 'Leave']
+        && request.resource.data.studentName == get(/databases/$(database)/documents/students/$(request.resource.data.studentId)).data.name
+        && request.resource.data.admissionNo == get(/databases/$(database)/documents/students/$(request.resource.data.studentId)).data.admissionNo
+        && request.resource.data.className == get(/databases/$(database)/documents/students/$(request.resource.data.studentId)).data.className
+        && request.resource.data.date is string;
+    }
+    function validHomeworkSubmission() {
+      return studentRecordMatches(request.resource.data.studentId)
+        && exists(/databases/$(database)/documents/assignments/$(request.resource.data.assignmentId))
+        && get(/databases/$(database)/documents/students/$(request.resource.data.studentId)).data.className
+          == get(/databases/$(database)/documents/assignments/$(request.resource.data.assignmentId)).data.className
+        && request.resource.data.teacherId
+          == get(/databases/$(database)/documents/assignments/$(request.resource.data.assignmentId)).data.teacherId;
+    }
 
-    match /users/{userId} {
-      allow read: if signedIn() && (request.auth.uid == userId || isAdmin());
-      allow create: if signedIn() && request.auth.uid == userId
-        && request.resource.data.keys().hasAll(['email','name','phone','requestedRole','role','approvalStatus','photoUrl','createdAt'])
+    // Users may create only their own pending account. Role/approval/IDs are
+    // server-controlled and cannot be self-assigned or changed by the user.
+    match /users/{uid} {
+      allow read: if isAdmin() || owns(uid);
+      allow create: if owns(uid)
         && request.resource.data.keys().hasOnly([
-          'email','name','phone','guardianName','address','educationOrClass',
-          'requestedRole','role','approvalStatus','photoUrl','documentUrls','createdAt','profileComplete'
+          'email','name','phone','qualification','subjects','currentClass',
+          'childAdmissionNo','existingAdmissionNo','dateOfBirth','gender','address','emergencyContactName','emergencyContactPhone',
+          'guardianName','guardianPhone','previousSchool','experienceYears','relationshipToStudent','occupation',
+          'requestedRole','role','approvalStatus','profileCompleted','createdAt','updatedAt'
         ])
-        && request.resource.data.email == request.auth.token.email
         && request.resource.data.role == 'pending'
         && request.resource.data.approvalStatus == 'pending'
+        && request.resource.data.profileCompleted == true
         && request.resource.data.requestedRole in ['student','teacher','parent']
-        && request.resource.data.name is string && request.resource.data.name.size() > 1
-        && request.resource.data.phone is string && request.resource.data.phone.size() >= 7
-        && request.resource.data.photoUrl is string && request.resource.data.photoUrl.size() > 0
-        && (!('documentUrls' in request.resource.data) || request.resource.data.documentUrls is list && request.resource.data.documentUrls.size() <= 8)
-        && request.resource.data.createdAt == request.time;
-      allow update: if (isAdmin()
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-            'role','approvalStatus','approvedAt','approvedBy','schoolId',
-            'studentId','teacherId','className','admissionNo','cardIssuedAt','rejectionReason'
-          ])
-          && request.resource.data.role in ['student','teacher','parent','rejected']
-          && request.resource.data.approvalStatus == (request.resource.data.role == 'rejected' ? 'rejected' : 'approved')
-          && request.resource.data.approvedAt == request.time
-          && request.resource.data.approvedBy == request.auth.uid
-          && (request.resource.data.role == 'rejected' || request.resource.data.role == 'parent'
-              || (request.resource.data.schoolId is string && request.resource.data.schoolId.size() > 0)))
-        || (signedIn() && request.auth.uid == userId
-          && request.resource.data.role == resource.data.role
-          && request.resource.data.approvalStatus == resource.data.approvalStatus
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-            'name','phone','guardianName','address','educationOrClass','photoUrl','updatedAt'
-          ]));
-      allow delete: if isAdmin();
-    }
-
-    match /systemCounters/{counterId} {
-      allow read, write: if isAdmin();
-    }
-
-    // ID registry prevents two new approvals from claiming the same identifier.
-    match /idRegistry/{identifier} {
-      allow read, write: if isAdmin();
-    }
-
-    match /students/{studentId} {
-      allow read: if isAdmin() || isStaff() || (signedIn() && resource.data.userId == request.auth.uid);
-      allow create: if isAdmin()
-        && request.resource.data.keys().hasAll(['name','studentId','admissionNo','className','guardianPhone','createdAt','createdBy'])
-        && request.resource.data.name is string && request.resource.data.name.size() > 0
-        && request.resource.data.studentId is string && request.resource.data.studentId.size() > 0
-        && request.resource.data.admissionNo is string && request.resource.data.admissionNo.size() > 0
-        && request.resource.data.createdBy == request.auth.uid
-        && request.resource.data.createdAt == request.time;
-      allow update: if isAdmin();
-      allow delete: if isAdmin();
-    }
-
-    match /attendance/{attendanceId} {
-      function validAttendance() {
-        return request.resource.data.keys().hasAll(['studentId','studentName','admissionNo','className','date','status','markedBy'])
-          && request.resource.data.studentId is string
-          && request.resource.data.status in ['Present','Absent','Leave']
-          && request.resource.data.markedBy == request.auth.uid
-          && exists(/databases/$(database)/documents/students/$(request.resource.data.studentId));
-      }
-      allow read: if isAdmin() || isStaff() || (signedIn() && resource.data.studentId == request.auth.uid);
-      allow create: if isStaff() && validAttendance() && request.resource.data.createdAt == request.time;
-      allow update: if isStaff() && validAttendance()
-        && request.resource.data.studentId == resource.data.studentId
-        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.name is string
+        && request.resource.data.name.size() >= 2
+        && request.resource.data.name.size() <= 100
+        && request.resource.data.phone is string
+        && request.resource.data.phone.size() <= 30
+        && request.resource.data.qualification is string
+        && request.resource.data.qualification.size() <= 150
+        && request.resource.data.subjects is string
+        && request.resource.data.subjects.size() <= 300
+        && request.resource.data.currentClass is string
+        && request.resource.data.currentClass.size() <= 80
+        && request.resource.data.childAdmissionNo is string
+        && request.resource.data.childAdmissionNo.size() <= 80
+        && request.resource.data.existingAdmissionNo is string
+        && request.resource.data.existingAdmissionNo.size() <= 80
+        && request.resource.data.dateOfBirth is string
+        && request.resource.data.dateOfBirth.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        && request.resource.data.gender in ['male','female','other','prefer_not_to_say']
+        && request.resource.data.address is string
+        && request.resource.data.address.size() >= 5
+        && request.resource.data.address.size() <= 300
+        && request.resource.data.emergencyContactName is string
+        && request.resource.data.emergencyContactName.size() <= 100
+        && request.resource.data.emergencyContactPhone is string
+        && request.resource.data.emergencyContactPhone.size() <= 30
+        && request.resource.data.guardianName is string
+        && request.resource.data.guardianName.size() <= 100
+        && request.resource.data.guardianPhone is string
+        && request.resource.data.guardianPhone.size() <= 30
+        && request.resource.data.previousSchool is string
+        && request.resource.data.previousSchool.size() <= 150
+        && request.resource.data.experienceYears is number
+        && request.resource.data.experienceYears >= 0
+        && request.resource.data.experienceYears <= 60
+        && request.resource.data.relationshipToStudent is string
+        && request.resource.data.relationshipToStudent.size() <= 50
+        && request.resource.data.occupation is string
+        && request.resource.data.occupation.size() <= 100
+        && (request.resource.data.requestedRole != 'student' || (request.resource.data.currentClass.size() > 0 && request.resource.data.guardianName.size() >= 2 && request.resource.data.guardianPhone.size() > 0))
+        && (request.resource.data.requestedRole != 'teacher' || (request.resource.data.qualification.size() > 0 && request.resource.data.subjects.size() > 0))
+        && (request.resource.data.requestedRole != 'parent' || (request.resource.data.childAdmissionNo.size() > 0 && request.resource.data.relationshipToStudent.size() > 0))
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.createdAt == request.time
         && request.resource.data.updatedAt == request.time;
+      allow update: if isAdmin() || (owns(uid)
+        && request.resource.data.role == resource.data.role
+        && request.resource.data.approvalStatus == resource.data.approvalStatus
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'displayName','phone','photoUrl','uploadedDocuments','updatedAt','lastLoginAt'
+        ])
+        && (!('photoUrl' in request.resource.data) || (request.resource.data.photoUrl is string && request.resource.data.photoUrl.size() <= 2048))
+        && (!('uploadedDocuments' in request.resource.data) || (request.resource.data.uploadedDocuments is list && request.resource.data.uploadedDocuments.size() <= 20)));
       allow delete: if isAdmin();
     }
 
-    match /teachers/{teacherId} {
-      allow read: if isAdmin() || (signedIn() && request.auth.uid == resource.data.userId);
+    // School-wide writes remain Admin-only. Approved role accounts receive
+    // narrowly scoped reads and selected workflow writes tied to issued IDs.
+    // These rules must pass the included emulator suite before deployment.
+    match /students/{id} {
+      allow read: if isAdmin() || (activeSchoolUser() && (
+        (profile().role == 'student' && (id == request.auth.uid || ('linkedStudentId' in profile() && id == profile().linkedStudentId)))
+        || (profile().role == 'parent' && (id == profile().linkedStudentId || (profile().linkedStudentIds is list && id in profile().linkedStudentIds)))
+        || (profile().role == 'teacher' && resource.data.teacherId == profile().teacherId)
+      ));
       allow create, update, delete: if isAdmin();
     }
-
-    match /announcements/{docId} {
-      allow read: if signedIn() && userData(request.auth.uid).approvalStatus == 'approved';
-      allow create: if isAdmin() || isStaff();
+    match /teacherAttendance/{id} {
+      allow read: if isAdmin() || (approvedRole('teacher') && resource.data.teacherUid == request.auth.uid);
+      allow write: if isAdmin();
+    }
+    match /teacherPayroll/{id} {
+      allow read: if isAdmin() || (approvedRole('teacher') && resource.data.teacherUid == request.auth.uid);
+      allow write: if isAdmin();
+    }
+    match /teachers/{id} { allow read, write: if isAdmin(); }
+    match /parents/{id} { allow read, write: if isAdmin(); }
+    match /classes/{id} {
+      allow read: if isAdmin() || classMatchesUser() || teacherOwnsClass();
+      allow write: if isAdmin();
+    }
+    match /sections/{id} { allow read, write: if isAdmin(); }
+    match /subjects/{id} {
+      allow read: if isAdmin() || classMatchesUser() || teacherOwnsRecord();
+      allow write: if isAdmin();
+    }
+    match /timetables/{id} {
+      allow read: if isAdmin() || classMatchesUser() || teacherOwnsRecord();
+      allow write: if isAdmin();
+    }
+    match /attendance/{id} {
+      allow read: if isAdmin() || studentRecordMatches(resource.data.studentId) || teacherAssignedStudent(resource.data.studentId);
+      allow create: if isAdmin() || validTeacherAttendancePayload();
+      allow update: if isAdmin() || (request.resource.data.studentId == resource.data.studentId
+        && validTeacherAttendancePayload());
+      allow delete: if isAdmin();
+    }
+    match /leaveRequests/{id} {
+      allow read: if isAdmin() || (approvedRole('teacher') && resource.data.teacherUid == request.auth.uid);
+      allow create: if approvedRole('teacher')
+        && request.resource.data.keys().hasOnly(['teacherUid','teacherId','teacherName','reason','startDate','endDate','status','createdAt','updatedAt'])
+        && request.resource.data.teacherUid == request.auth.uid
+        && request.resource.data.teacherId == profile().teacherId
+        && request.resource.data.teacherName is string
+        && request.resource.data.teacherName.size() <= 100
+        && request.resource.data.status == 'pending'
+        && request.resource.data.reason is string && request.resource.data.reason.size() >= 5
+        && request.resource.data.reason.size() <= 1000
+        && request.resource.data.startDate is string
+        && request.resource.data.startDate.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        && request.resource.data.endDate is string
+        && request.resource.data.endDate.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        && request.resource.data.endDate >= request.resource.data.startDate
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time;
       allow update, delete: if isAdmin();
     }
-    match /classes/{docId} {
-      allow read: if signedIn() && userData(request.auth.uid).approvalStatus == 'approved';
-      allow create, update: if isAdmin() || isStaff();
+    match /exams/{id} {
+      allow read: if isAdmin() || classMatchesUser() || teacherOwnsRecord();
+      allow write: if isAdmin();
+    }
+    match /results/{id} {
+      allow read: if isAdmin() || studentRecordMatches(resource.data.studentId) || teacherAssignedStudent(resource.data.studentId);
+      allow write: if isAdmin();
+    }
+    match /assignments/{id} {
+      allow read: if isAdmin() || classMatchesUser() || teacherOwnsRecord();
+      allow write: if isAdmin();
+    }
+    match /homeworkSubmissions/{id} {
+      allow read: if isAdmin()
+        || studentRecordMatches(resource.data.studentId)
+        || teacherOwnsRecord();
+      allow create: if isAdmin() || (
+        approvedRole('student')
+        && id == request.resource.data.studentId + '__' + request.resource.data.assignmentId
+        && request.resource.data.keys().hasOnly(['studentId','assignmentId','createdBy','status','answer','teacherId','assignmentTitle','studentName','submittedAt'])
+        && validHomeworkSubmission()
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.status == 'submitted'
+        && request.resource.data.answer is string
+        && request.resource.data.answer.size() > 0
+        && request.resource.data.answer.size() <= 4000
+        && request.resource.data.assignmentId is string
+        && request.resource.data.submittedAt == request.time
+      );
+      allow update: if isAdmin() || (teacherOwnsRecord()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status', 'marks', 'feedback', 'reviewedBy', 'reviewedAt'
+        ])
+        && request.resource.data.status == 'reviewed'
+        && request.resource.data.reviewedBy == request.auth.uid
+        && (!('marks' in request.resource.data) || (request.resource.data.marks is number && request.resource.data.marks >= 0 && request.resource.data.marks <= 1000))
+        && (!('feedback' in request.resource.data) || request.resource.data.feedback is string)
+        && (!('feedback' in request.resource.data) || request.resource.data.feedback.size() <= 1000));
       allow delete: if isAdmin();
     }
-    match /homework/{docId} {
-      allow read: if signedIn() && userData(request.auth.uid).approvalStatus == 'approved';
-      allow create, update: if isAdmin() || isStaff();
-      allow delete: if isAdmin() || (isStaff() && resource.data.createdBy == request.auth.uid);
+    match /feeStructures/{id} { allow read, write: if isAdmin(); }
+    match /feePayments/{id} {
+      allow read: if isAdmin() || studentRecordMatches(resource.data.studentId);
+      allow create: if isAdmin()
+        && request.resource.data.keys().hasOnly(['studentId','studentName','feeStructureId','amount','month','method','notes','createdAt','createdBy','updatedAt','receiptNo'])
+        && request.resource.data.studentId is string
+        && exists(/databases/$(database)/documents/students/$(request.resource.data.studentId))
+        && request.resource.data.feeStructureId is string
+        && exists(/databases/$(database)/documents/feeStructures/$(request.resource.data.feeStructureId))
+        && get(/databases/$(database)/documents/feeStructures/$(request.resource.data.feeStructureId)).data.className
+          == get(/databases/$(database)/documents/students/$(request.resource.data.studentId)).data.className
+        && request.resource.data.amount is number
+        && request.resource.data.amount > 0
+        && request.resource.data.month is string
+        && request.resource.data.month.matches('^[0-9]{4}-(0[1-9]|1[0-2])$')
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.receiptNo is string
+        && request.resource.data.receiptNo.matches('FEE-[0-9]{4}-[0-9]{6}');
+      allow update, delete: if false;
     }
-    match /exams/{docId} {
-      allow read: if signedIn() && userData(request.auth.uid).approvalStatus == 'approved';
-      allow create, update: if isAdmin() || isStaff();
+    match /expenses/{id} { allow read, write: if isAdmin(); }
+    match /notices/{id} {
+      // Published notices are intended for all active school accounts.
+      allow read: if isAdmin() || (activeSchoolUser() && resource.data.status == 'published');
+      allow write: if isAdmin();
+    }
+    match /announcements/{id} {
+      allow read: if isAdmin() || (activeSchoolUser() && resource.data.status == 'published');
+      allow write: if isAdmin();
+    }
+    match /notifications/{id} {
+      allow read: if isAdmin() || (signedIn() && resource.data.recipientUid == request.auth.uid);
+      allow create: if isAdmin();
+      allow update: if signedIn() && resource.data.recipientUid == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isRead'])
+        && request.resource.data.isRead is bool;
       allow delete: if isAdmin();
     }
-    match /fees/{docId} {
-      allow read: if isAdmin() || isStaff() || (signedIn() && (resource.data.studentUid == request.auth.uid || resource.data.parentUid == request.auth.uid));
-      allow create, update, delete: if isAdmin();
+    match /reports/{id} {
+      allow read: if isAdmin() || (activeSchoolUser()
+        && resource.data.reportType == 'report_card'
+        && studentRecordMatches(resource.data.studentId));
+      allow write: if isAdmin();
+    }
+    match /schoolSettings/{id} { allow read, write: if isAdmin(); }
+    match /systemCounters/{id} { allow read, write: if isAdmin(); }
+    match /adminAuditLogs/{id} {
+      allow read: if isAdmin();
+      allow create: if isAdmin();
+      allow update, delete: if false;
     }
     match /{document=**} { allow read, write: if false; }
   }

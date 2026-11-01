@@ -3,15 +3,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:schoolpro/main.dart';
 
 void main() {
-  testWidgets('SchoolPro authentication screen displays its title', (
-    tester,
-  ) async {
-    await tester.pumpWidget(
-      MaterialApp(home: AuthScreen(urdu: false, onLanguageChanged: (_) {})),
-    );
-
-    expect(find.text('SchoolPro'), findsOneWidget);
-    expect(find.text('School Management System'), findsOneWidget);
-    expect(find.text('Welcome back'), findsOneWidget);
+  testWidgets('Pending account screen explains the approval gate', (tester) async {
+    await tester.pumpWidget(const MaterialApp(home: PendingScreen(urdu: false)));
+    expect(find.text('Your account is awaiting approval. Contact the school admin.'), findsOneWidget);
   });
 }

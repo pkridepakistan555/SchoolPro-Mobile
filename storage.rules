@@ -3,17 +3,26 @@ service firebase.storage {
   match /b/{bucket}/o {
     function signedIn() { return request.auth != null; }
     function isAdmin() { return signedIn() && request.auth.token.admin == true; }
-    match /profileApplications/{uid}/profile.jpg {
-      allow write: if signedIn() && request.auth.uid == uid
-        && request.resource.size < 5 * 1024 * 1024
-        && request.resource.contentType.matches('image/.*');
-      allow read: if signedIn() && (request.auth.uid == uid || isAdmin());
-    }
-    match /profileDocuments/{uid}/{fileName} {
-      allow write: if signedIn() && request.auth.uid == uid
+    function validUpload() {
+      return request.resource != null
         && request.resource.size < 10 * 1024 * 1024
-        && (request.resource.contentType.matches('image/.*') || request.resource.contentType == 'application/pdf');
-      allow read: if signedIn() && (request.auth.uid == uid || isAdmin());
+        && request.resource.contentType.matches('(image/.*|application/pdf)');
+    }
+    match /userDocuments/{uid}/{fileName} {
+      allow read: if isAdmin() || (signedIn() && request.auth.uid == uid);
+      allow create, update: if (isAdmin() || (signedIn() && request.auth.uid == uid)) && validUpload();
+      allow delete: if isAdmin();
+    }
+    match /userProfiles/{uid}/{fileName} {
+      allow read: if isAdmin() || (signedIn() && request.auth.uid == uid);
+      allow create, update: if (isAdmin() || (signedIn() && request.auth.uid == uid))
+        && request.resource != null && request.resource.size < 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+      allow delete: if isAdmin();
+    }
+    match /schoolCirculars/{fileName} {
+      allow read: if signedIn();
+      allow write: if isAdmin() && validUpload();
     }
     match /{allPaths=**} { allow read, write: if false; }
   }
