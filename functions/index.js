@@ -2,8 +2,7 @@ const { onCall, HttpsError } = require('firebase-functions/v2/https');
 const { initializeApp } = require('firebase-admin/app');
 const { getFirestore, FieldValue } = require('firebase-admin/firestore');
 const { getAuth } = require('firebase-admin/auth');
-const { onDocumentCreated, onDocumentUpdated, onDocumentWritten } = require('firebase-functions/v2/firestore');
-const { isNewlyPublishedNotice, createMissingNoticeNotifications } = require('./notice_notifications');
+const { onDocumentCreated, onDocumentUpdated } = require('firebase-functions/v2/firestore');
 
 initializeApp();
 const db = getFirestore();
@@ -534,16 +533,39 @@ exports.notifyParentsOnFeePayment = onDocumentCreated({ document: 'feePayments/{
   });
 });
 
-exports.notifyParentsOnPublishedNotice = onDocumentWritten({ document: 'notices/{id}', region: 'asia-south1' }, async (event) => {
-  const before = event.data && event.data.before.exists ? event.data.before.data() : null;
-  const after = event.data && event.data.after.exists ? event.data.after.data() : null;
-  if (!isNewlyPublishedNotice(before, after)) return;
+exports.notifyParentsOnPublishedNotice = onDocumentUpdated({ document: 'notices/{id}', region: 'asia-south1' }, async (event) => {
+  const before = event.data && event.data.before.data();
+  const after = event.data && event.data.after.data();
+  if (!after || after.status !== 'published' || (before && before.status === 'published')) return;
   const parents = await db.collection('parents').get();
-  await createMissingNoticeNotifications({
-    db,
-    parents: parents.docs.map((doc) => ({ id: doc.id, ...doc.data() })),
-    noticeId: event.params.id,
-    notice: after,
-    serverTimestamp: () => FieldValue.serverTimestamp(),
-  });
+  for (let i = 0; i < parents.docs.length; i += 450) {
+    const batch = db.batch();
+    for (const parent of parents.docs.slice(i, i + 450)) {
+      if (parent.data().status !== 'active') continue;
+      const notificationRef = db.collection('notifications').doc(`notice_${event.params.id}_${parent.id}`);
+      batch.set(notificationRef, {
+        recipientUid: parent.id, type: 'notice', title: String(after.title || 'School announcement'),
+        body: String(after.body || after.message || 'A new school notice has been published.'),
+        relatedId: event.params.id, isRead: false, createdAt: FieldValue.serverTimestamp(),
+      });
+    }
+    await batch.commit();
+  }
+});
+
+
+exports.notifyParentsOnNewPublishedNotice = onDocumentCreated({ document: 'notices/{id}', region: 'asia-south1' }, async (event) => {
+  const data = event.data && event.data.data();
+  if (!data || data.status !== 'published') return;
+  const parents = await db.collection('parents').get();
+  const docs = parents.docs;
+  for (let i = 0; i < docs.length; i += 450) {
+    const batch = db.batch();
+    for (const parent of docs.slice(i, i + 450)) {
+      if (parent.data().status !== 'active') continue;
+      const ref = db.collection('notifications').doc(`notice_${event.params.id}_${parent.id}`);
+      batch.set(ref, { recipientUid: parent.id, type: 'notice', title: String(data.title || 'School announcement'), body: String(data.body || data.message || 'A new school notice has been published.'), relatedId: event.params.id, isRead: false, createdAt: FieldValue.serverTimestamp() });
+    }
+    await batch.commit();
+  }
 });

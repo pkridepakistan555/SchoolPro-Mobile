@@ -15,9 +15,7 @@ need flutter; need dart; need node; need npm; need firebase; need java
 cd "$ROOT"
 echo "== Source syntax/config preflight =="
 node --check functions/index.js
-node --check functions/notice_notifications.js
 node --check tests/rules.test.js
-node --check tests/functions.test.js
 node -e "JSON.parse(require('fs').readFileSync('firebase.json','utf8')); JSON.parse(require('fs').readFileSync('firestore.indexes.json','utf8')); console.log('Firebase JSON configuration: OK')"
 cmp -s firestore.rules admin/SchoolPro-Admin/firestore.rules || { echo 'Root/Admin Firestore rules differ.'; exit 11; }
 echo "== Dependencies =="

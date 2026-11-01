@@ -1,15 +1,8 @@
 {
   "name": "schoolpro-functions",
   "private": true,
-  "engines": {
-    "node": "22"
-  },
+  "engines": { "node": "22" },
   "main": "index.js",
-  "scripts": {
-    "lint": "node --check index.js && node --check notice_notifications.js"
-  },
-  "dependencies": {
-    "firebase-admin": "^13.0.2",
-    "firebase-functions": "^6.3.2"
-  }
+  "scripts": { "lint": "node --check index.js" },
+  "dependencies": { "firebase-admin": "^13.0.2", "firebase-functions": "^6.3.2" }
 }

@@ -34,10 +34,6 @@
 - Monthly dues صرف explicit `frequency=monthly` structures اور matching `feeStructureId` + `YYYY-MM` payments پر calculate ہوتے ہیں۔ غیر مربوط/legacy payments الگ unallocated دکھائے جاتے ہیں۔
 
 ## اس ریویژن میں درست کیے گئے واضح مسائل
-- Published notice کے Create اور Update کے الگ الگ triggers کو ایک `onDocumentWritten` trigger میں یکجا کیا؛ اب صرف نئی published notice یا draft-to-published transition پر اطلاع بنتی ہے۔
-- Notice notification deterministic ID کے ساتھ transaction میں صرف عدم موجودگی پر create ہوتی ہے؛ event retry یا دوبارہ execution پہلے سے پڑھی گئی notification کا `isRead` واپس `false` نہیں کرتا اور `createdAt` بھی تبدیل نہیں ہوتا۔
-- Firestore Rules میں `teacherAttendance` کی duplicate match declaration ختم کی؛ approved teacher کی اپنی attendance read اور Admin-only writes والی اصل اجازت برقرار ہے۔ Root اور Admin Web rules دونوں synchronized ہیں۔
-- Notice eligibility اور notification idempotency کے regression tests شامل کیے؛ release preflight اور GitHub CI میں نئے source/test syntax checks شامل ہیں۔
 - `rejectSchoolRegistration` میں missing Auth user lookup درست کیا گیا۔
 - Parent-child linking transaction میں student records کی fresh revalidation شامل کی گئی؛ inactive/deleted students link نہیں ہو سکتے۔
 - Teacher leave Rules میں allowed keys، date format/order اور server timestamps validate ہوتے ہیں۔
@@ -48,10 +44,7 @@
 
 ## اس ماحول میں حقیقتاً چلائے گئے checks
 - `node --check functions/index.js` — PASS
-- `node --check functions/notice_notifications.js` — PASS
 - `node --check tests/rules.test.js` — PASS
-- `node --check tests/functions.test.js` — PASS
-- Published-notice helper regression checks (local Node assertions) — PASS
 - `firebase.json`، `firestore.indexes.json`، functions/tests package JSON — PASS parse
 - Mobile/Admin pubspec YAML اور GitHub Actions YAML — PASS parse
 - Root اور Admin Web Firestore Rules copies byte-identical — PASS

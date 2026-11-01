@@ -1870,7 +1870,7 @@ class _UserApprovalsScreenState extends State<UserApprovalsScreen> {
                     title: Text((doc.data()['name'] ?? doc.data()['email'] ?? doc.id).toString()),
                     subtitle: Text('Email: ${doc.data()['email'] ?? '-'}\nRole: ${doc.data()['requestedRole'] ?? '-'} | Phone: ${doc.data()['phone'] ?? '-'}\nDOB: ${doc.data()['dateOfBirth'] ?? '-'} | Gender: ${doc.data()['gender'] ?? '-'}\nAddress: ${doc.data()['address'] ?? '-'}\nStudent: Guardian ${doc.data()['guardianName'] ?? '-'} / ${doc.data()['guardianPhone'] ?? '-'} | Class ${doc.data()['currentClass'] ?? '-'}\nTeacher: ${doc.data()['qualification'] ?? '-'} | ${doc.data()['subjects'] ?? '-'} | ${doc.data()['experienceYears'] ?? 0} years\nParent: Child ${doc.data()['childAdmissionNo'] ?? '-'} | ${doc.data()['relationshipToStudent'] ?? '-'}\nExisting Student Admission: ${doc.data()['existingAdmissionNo'] ?? '-'}\nUID: ${doc.id}'),
                     isThreeLine: true,
-                    trailing: Wrap(mainAxisSize:MainAxisSize.min, children: [
+                    trailing: Wrap(children: [
                       if ((doc.data()['photoUrl']??'').toString().isNotEmpty || (doc.data()['uploadedDocuments'] as List? ?? const []).isNotEmpty)
                         IconButton(onPressed: busy ? null : () => showSubmittedDocuments(doc.data()), icon: const Icon(Icons.folder_open), tooltip:t('View document links','دستاویزات کے لنکس دیکھیں')),
                       IconButton(onPressed: busy ? null : () => editRequest(doc.id, doc.data()), icon: const Icon(Icons.edit_outlined), tooltip:t('Edit request','درخواست میں ترمیم')),
