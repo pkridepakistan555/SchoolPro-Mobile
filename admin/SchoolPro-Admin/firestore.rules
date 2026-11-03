@@ -172,13 +172,12 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
     match /attendance/{id} {
-      allow read: if isAdmin() || studentRecordMatches(resource.data.studentId) || teacherAssignedStudent(resource.data.studentId);
+      allow read: if isAdmin() || studentRecordMatches(resource.data.studentId) || teacherAssignedStudent(resource.data.studentId) || teacherMarkedAttendance();
       allow create: if isAdmin() || validTeacherAttendancePayload();
       allow update: if isAdmin() || (request.resource.data.studentId == resource.data.studentId
         && validTeacherAttendancePayload());
       allow delete: if isAdmin();
     }
-    match /teacherAttendance/{id} { allow read, write: if isAdmin(); }
     match /leaveRequests/{id} {
       allow read: if isAdmin() || (approvedRole('teacher') && resource.data.teacherUid == request.auth.uid);
       allow create: if approvedRole('teacher')

@@ -2,7 +2,8 @@ const { onCall, HttpsError } = require('firebase-functions/v2/https');
 const { initializeApp } = require('firebase-admin/app');
 const { getFirestore, FieldValue } = require('firebase-admin/firestore');
 const { getAuth } = require('firebase-admin/auth');
-const { onDocumentCreated, onDocumentUpdated } = require('firebase-functions/v2/firestore');
+const { onDocumentCreated, onDocumentUpdated, onDocumentWritten } = require('firebase-functions/v2/firestore');
+const { isNewlyPublishedNotice, createMissingNoticeNotifications } = require('./notice_notifications');
 
 initializeApp();
 const db = getFirestore();
@@ -123,6 +124,109 @@ exports.approveAndIssueSchoolId = onCall({ region: 'asia-south1', enforceAppChec
 });
 
 
+
+// Admin-only creation of a fully active school login. Auth owns password hashing;
+// credentials are never written to Firestore or audit logs. IDs are generated server-side.
+exports.adminCreateSchoolUser = onCall({ region: 'asia-south1', enforceAppCheck: false }, async (request) => {
+  requireAdmin(request);
+  const input = request.data || {};
+  const role = String(input.role || '').trim();
+  const name = String(input.name || '').trim();
+  const email = String(input.email || '').trim().toLowerCase();
+  const password = String(input.password || '');
+  const phone = String(input.phone || '').trim();
+  const dateOfBirth = String(input.dateOfBirth || '').trim();
+  const gender = String(input.gender || 'prefer_not_to_say').trim();
+  const address = String(input.address || '').trim();
+  const qualification = String(input.qualification || '').trim();
+  const subjects = String(input.subjects || '').trim();
+  const experienceYears = Number(input.experienceYears || 0);
+  const currentClass = String(input.currentClass || '').trim();
+  const guardianName = String(input.guardianName || '').trim();
+  const guardianPhone = String(input.guardianPhone || '').trim();
+  const childAdmissionNo = String(input.childAdmissionNo || '').trim();
+  const relationshipToStudent = String(input.relationshipToStudent || '').trim();
+  const dobMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateOfBirth);
+  const dob = dobMatch ? new Date(Date.UTC(Number(dobMatch[1]), Number(dobMatch[2]) - 1, Number(dobMatch[3]))) : null;
+  if (!['student', 'teacher', 'parent'].includes(role) || name.length < 2 || name.length > 100 ||
+      !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) || password.length < 8 || password.length > 128 ||
+      phone.length > 30 || !dob || dob.toISOString().slice(0, 10) !== dateOfBirth || dob.getTime() > Date.now() ||
+      !['male','female','other','prefer_not_to_say'].includes(gender) || address.length < 5 || address.length > 300) {
+    throw new HttpsError('invalid-argument', 'Check role, name, email, password (8+ characters), phone, date of birth, gender and address.');
+  }
+  if (role === 'student' && (!currentClass || currentClass.length > 80 || guardianName.length < 2 || !guardianPhone || guardianPhone.length > 30)) {
+    throw new HttpsError('invalid-argument', 'Student account requires class and guardian name/phone.');
+  }
+  if (role === 'teacher' && (!qualification || qualification.length > 150 || !subjects || subjects.length > 300 || !Number.isInteger(experienceYears) || experienceYears < 0 || experienceYears > 60)) {
+    throw new HttpsError('invalid-argument', 'Teacher account requires qualification, subjects and valid experience years.');
+  }
+  if (role === 'parent' && (!childAdmissionNo || childAdmissionNo.length > 80 || !relationshipToStudent || relationshipToStudent.length > 50)) {
+    throw new HttpsError('invalid-argument', 'Parent account requires the child Admission Number and relationship.');
+  }
+
+  const authUser = await getAuth().createUser({ email, password, displayName: name, emailVerified: true, disabled: false });
+  const uid = authUser.uid;
+  const userRef = db.collection('users').doc(uid);
+  const counterRef = db.collection('systemCounters').doc(role === 'student' ? 'student' : role);
+  const canonicalCollection = role === 'student' ? 'students' : role === 'teacher' ? 'teachers' : 'parents';
+  const canonicalRef = db.collection(canonicalCollection).doc(uid);
+  try {
+    const result = await db.runTransaction(async (tx) => {
+      const [counterSnap, canonicalSnap] = await Promise.all([tx.get(counterRef), tx.get(canonicalRef)]);
+      if (canonicalSnap.exists) throw new HttpsError('already-exists', 'A school profile already exists for this account.');
+      let linkedStudentSnap = null;
+      if (role === 'parent') {
+        const matches = await tx.get(db.collection('students').where('admissionNo', '==', childAdmissionNo).limit(2));
+        if (matches.docs.length !== 1) throw new HttpsError('failed-precondition', 'Child Admission Number is missing or duplicated.');
+        linkedStudentSnap = await tx.get(matches.docs[0].ref);
+        if (!linkedStudentSnap.exists || ['inactive','deleted'].includes(linkedStudentSnap.data().status)) throw new HttpsError('failed-precondition', 'The linked student is inactive.');
+      }
+      let next = Number(counterSnap.exists ? counterSnap.data().value : 0) + 1;
+      if (!Number.isSafeInteger(next) || next < 1) throw new HttpsError('resource-exhausted', 'ID counter is invalid.');
+      const year = new Date().getUTCFullYear();
+      const idField = role === 'student' ? 'admissionNo' : role === 'teacher' ? 'teacherId' : 'parentId';
+      let issued;
+      for (let attempt = 0; attempt < 1000 && next <= 99999; attempt++, next++) {
+        const serial = String(next).padStart(5, '0');
+        const candidate = role === 'student' ? `SP-${year}-${serial}` : role === 'teacher' ? `TCH-${year}-${serial}` : `PAR-${year}-${serial}`;
+        const collision = await tx.get(db.collection(canonicalCollection).where(idField, '==', candidate).limit(1));
+        if (collision.empty) { issued = role === 'student' ? { admissionNo: candidate, rollNo: serial } : { [idField]: candidate }; break; }
+      }
+      if (!issued) throw new HttpsError('resource-exhausted', 'Could not allocate a unique school ID.');
+      const now = FieldValue.serverTimestamp();
+      const linkedStudentId = linkedStudentSnap ? linkedStudentSnap.id : null;
+      const linkedClass = linkedStudentSnap ? String(linkedStudentSnap.data().className || '') : '';
+      const common = { uid, name, phone, email, dateOfBirth, gender, address, createdBy: request.auth.uid, createdAt: now, updatedAt: now, status: 'active' };
+      const userProfile = {
+        email, name, phone, dateOfBirth, gender, address,
+        emergencyContactName: String(input.emergencyContactName || '').trim(),
+        emergencyContactPhone: String(input.emergencyContactPhone || '').trim(),
+        requestedRole: role, role, approvalStatus: 'approved', profileCompleted: true,
+        createdAt: now, updatedAt: now, approvedAt: now, approvedBy: request.auth.uid,
+        ...issued,
+        ...(role === 'student' ? { currentClass, guardianName, guardianPhone, previousSchool: String(input.previousSchool || '').trim(), linkedStudentId: uid } : {}),
+        ...(role === 'teacher' ? { qualification, subjects, experienceYears } : {}),
+        ...(role === 'parent' ? { childAdmissionNo, relationshipToStudent, occupation: String(input.occupation || '').trim(), linkedStudentId, linkedStudentIds: linkedStudentId ? [linkedStudentId] : [], linkedStudentClasses: linkedClass ? [linkedClass] : [], currentClass: linkedClass } : {}),
+      };
+      const canonical = role === 'student'
+        ? { ...common, ...issued, className: currentClass, teacherId: '', guardianName, guardianPhone, previousSchool: String(input.previousSchool || '').trim(), linkedUserUid: uid }
+        : role === 'teacher'
+          ? { ...common, ...issued, qualification, subjects, experienceYears }
+          : { ...common, ...issued, childAdmissionNo, relationshipToStudent, occupation: String(input.occupation || '').trim(), linkedStudentId, linkedStudentIds: linkedStudentId ? [linkedStudentId] : [], linkedStudentClasses: linkedClass ? [linkedClass] : [], currentClass: linkedClass };
+      tx.set(counterRef, { value: next, updatedAt: now }, { merge: true });
+      tx.create(userRef, userProfile);
+      tx.create(canonicalRef, canonical);
+      if (linkedStudentSnap) tx.update(linkedStudentSnap.ref, { linkedParentUids: FieldValue.arrayUnion(uid), updatedAt: now });
+      const auditRef = db.collection('adminAuditLogs').doc();
+      tx.set(auditRef, { action: 'admin_create_school_user', uid, role, issued, actorUid: request.auth.uid, createdAt: now });
+      return { uid, role, ...issued, approvalStatus: 'approved' };
+    });
+    return result;
+  } catch (error) {
+    await getAuth().deleteUser(uid).catch(() => {});
+    throw error;
+  }
+});
 
 // Admin may add an enrolment record without creating login credentials. The
 // Admission Number is still server-issued and collision-checked transactionally.
@@ -533,39 +637,16 @@ exports.notifyParentsOnFeePayment = onDocumentCreated({ document: 'feePayments/{
   });
 });
 
-exports.notifyParentsOnPublishedNotice = onDocumentUpdated({ document: 'notices/{id}', region: 'asia-south1' }, async (event) => {
-  const before = event.data && event.data.before.data();
-  const after = event.data && event.data.after.data();
-  if (!after || after.status !== 'published' || (before && before.status === 'published')) return;
+exports.notifyParentsOnPublishedNotice = onDocumentWritten({ document: 'notices/{id}', region: 'asia-south1' }, async (event) => {
+  const before = event.data && event.data.before.exists ? event.data.before.data() : null;
+  const after = event.data && event.data.after.exists ? event.data.after.data() : null;
+  if (!isNewlyPublishedNotice(before, after)) return;
   const parents = await db.collection('parents').get();
-  for (let i = 0; i < parents.docs.length; i += 450) {
-    const batch = db.batch();
-    for (const parent of parents.docs.slice(i, i + 450)) {
-      if (parent.data().status !== 'active') continue;
-      const notificationRef = db.collection('notifications').doc(`notice_${event.params.id}_${parent.id}`);
-      batch.set(notificationRef, {
-        recipientUid: parent.id, type: 'notice', title: String(after.title || 'School announcement'),
-        body: String(after.body || after.message || 'A new school notice has been published.'),
-        relatedId: event.params.id, isRead: false, createdAt: FieldValue.serverTimestamp(),
-      });
-    }
-    await batch.commit();
-  }
-});
-
-
-exports.notifyParentsOnNewPublishedNotice = onDocumentCreated({ document: 'notices/{id}', region: 'asia-south1' }, async (event) => {
-  const data = event.data && event.data.data();
-  if (!data || data.status !== 'published') return;
-  const parents = await db.collection('parents').get();
-  const docs = parents.docs;
-  for (let i = 0; i < docs.length; i += 450) {
-    const batch = db.batch();
-    for (const parent of docs.slice(i, i + 450)) {
-      if (parent.data().status !== 'active') continue;
-      const ref = db.collection('notifications').doc(`notice_${event.params.id}_${parent.id}`);
-      batch.set(ref, { recipientUid: parent.id, type: 'notice', title: String(data.title || 'School announcement'), body: String(data.body || data.message || 'A new school notice has been published.'), relatedId: event.params.id, isRead: false, createdAt: FieldValue.serverTimestamp() });
-    }
-    await batch.commit();
-  }
+  await createMissingNoticeNotifications({
+    db,
+    parents: parents.docs.map((doc) => ({ id: doc.id, ...doc.data() })),
+    noticeId: event.params.id,
+    notice: after,
+    serverTimestamp: () => FieldValue.serverTimestamp(),
+  });
 });

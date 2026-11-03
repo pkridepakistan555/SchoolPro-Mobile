@@ -436,6 +436,12 @@ class AdminDashboard extends StatelessWidget {
                       onTap: () => openScreen(const UserApprovalsScreen()),
                     ),
                     module(
+                      icon: Icons.person_add_alt_1,
+                      title: 'Create School Account',
+                      subtitle: 'Create active Teacher, Student or Parent login',
+                      onTap: () => openScreen(const AdminCreateSchoolUserScreen()),
+                    ),
+                    module(
                       icon: Icons.account_tree_outlined,
                       title: 'School administration workflows',
                       subtitle: 'Parent multi-child links and teacher leave reviews',
@@ -1264,6 +1270,7 @@ class _UserApprovalsScreenState extends State<UserApprovalsScreen> {
     final query = FirebaseFirestore.instance
         .collection('users')
         .where('role', isEqualTo: 'pending')
+        .where('approvalStatus', isEqualTo: 'pending')
         .limit(100);
 
     return Scaffold(
@@ -1289,7 +1296,11 @@ class _UserApprovalsScreenState extends State<UserApprovalsScreen> {
                 return const Center(child: CircularProgressIndicator());
               }
 
-              final docs = snapshot.data?.docs ?? [];
+              final docs = (snapshot.data?.docs ?? []).where((doc) {
+                final data = doc.data();
+                return const ['student', 'teacher', 'parent'].contains(data['requestedRole']) &&
+                    data['approvalStatus'] == 'pending';
+              }).toList();
               if (docs.isEmpty) {
                 return const Center(
                   child: Padding(
@@ -1393,6 +1404,78 @@ class _UserApprovalsScreenState extends State<UserApprovalsScreen> {
       ),
     );
   }
+}
+
+class AdminCreateSchoolUserScreen extends StatefulWidget {
+  const AdminCreateSchoolUserScreen({super.key});
+  @override
+  State<AdminCreateSchoolUserScreen> createState() => _AdminCreateSchoolUserScreenState();
+}
+
+class _AdminCreateSchoolUserScreenState extends State<AdminCreateSchoolUserScreen> {
+  final _formKey = GlobalKey<FormState>();
+  final Map<String, TextEditingController> _c = {
+    for (final key in ['name','email','password','phone','dateOfBirth','address','qualification','subjects','experienceYears','currentClass','guardianName','guardianPhone','childAdmissionNo','relationshipToStudent','previousSchool','emergencyContactName','emergencyContactPhone','occupation']) key: TextEditingController(),
+  };
+  String _role = 'student';
+  String _gender = 'prefer_not_to_say';
+  bool _saving = false;
+  @override
+  void dispose() { for (final c in _c.values) { c.dispose(); } super.dispose(); }
+  String _v(String key) => _c[key]!.text.trim();
+  Widget _field(String key, String label, {bool required = true, bool secret = false, TextInputType? keyboard}) => Padding(
+    padding: const EdgeInsets.only(bottom: 12),
+    child: TextFormField(controller: _c[key], obscureText: secret, keyboardType: keyboard,
+      decoration: InputDecoration(labelText: label, border: const OutlineInputBorder()),
+      validator: (value) { final v = (value ?? '').trim(); if (required && v.isEmpty) return 'Required'; if (key == 'email' && v.isNotEmpty && !RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(v)) return 'Enter a valid email'; if (key == 'password' && v.length < 8) return 'Use at least 8 characters'; if (key == 'dateOfBirth' && !RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(v)) return 'Use YYYY-MM-DD'; return null; },
+    ),
+  );
+  Future<void> _create() async {
+    if (!_formKey.currentState!.validate()) return;
+    setState(() => _saving = true);
+    try {
+      final payload = <String, dynamic>{
+        'role': _role, 'name': _v('name'), 'email': _v('email'), 'password': _v('password'),
+        'phone': _v('phone'), 'dateOfBirth': _v('dateOfBirth'), 'gender': _gender, 'address': _v('address'),
+        'emergencyContactName': _v('emergencyContactName'), 'emergencyContactPhone': _v('emergencyContactPhone'),
+        if (_role == 'student') ...{'currentClass': _v('currentClass'), 'guardianName': _v('guardianName'), 'guardianPhone': _v('guardianPhone'), 'previousSchool': _v('previousSchool')},
+        if (_role == 'teacher') ...{'qualification': _v('qualification'), 'subjects': _v('subjects'), 'experienceYears': int.tryParse(_v('experienceYears')) ?? 0},
+        if (_role == 'parent') ...{'childAdmissionNo': _v('childAdmissionNo'), 'relationshipToStudent': _v('relationshipToStudent'), 'occupation': _v('occupation')},
+      };
+      final callable = FirebaseFunctions.instanceFor(region: 'asia-south1').httpsCallable('adminCreateSchoolUser');
+      final response = await callable.call(payload);
+      final result = Map<String, dynamic>.from(response.data as Map);
+      final issuedId = result['admissionNo'] ?? result['teacherId'] ?? result['parentId'] ?? '-';
+      if (mounted) await showDialog<void>(context: context, builder: (ctx) => AlertDialog(
+        title: const Text('Account created successfully'),
+        content: SelectableText('Role: $_role\nEmail: ${_v('email')}\nIssued ID: $issuedId\nUID: ${result['uid']}\n\nThe account is active. Share the temporary password securely with the user.'),
+        actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Done'))],
+      ));
+      if (mounted) Navigator.pop(context);
+    } on FirebaseFunctionsException catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Account creation failed: ${e.message ?? e.code}')));
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Account creation failed: $e')));
+    } finally { if (mounted) setState(() => _saving = false); }
+  }
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(title: const Text('Create School Account')),
+    body: Center(child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 720), child: Form(key: _formKey, child: ListView(padding: const EdgeInsets.all(20), children: [
+      const Text('Admin-created accounts are activated immediately. The server issues the unique school ID; passwords are never stored in Firestore.', style: TextStyle(fontWeight: FontWeight.w500)),
+      const SizedBox(height: 16),
+      DropdownButtonFormField<String>(value: _role, decoration: const InputDecoration(labelText: 'Account role', border: OutlineInputBorder()), items: const [DropdownMenuItem(value: 'student', child: Text('Student')), DropdownMenuItem(value: 'teacher', child: Text('Teacher')), DropdownMenuItem(value: 'parent', child: Text('Parent'))], onChanged: _saving ? null : (v) => setState(() => _role = v ?? 'student')),
+      const SizedBox(height: 12),
+      _field('name','Full name'), _field('email','Login email', keyboard: TextInputType.emailAddress), _field('password','Temporary password (minimum 8 characters)', secret: true),
+      _field('phone','Phone', required: false, keyboard: TextInputType.phone), _field('dateOfBirth','Date of birth (YYYY-MM-DD)'),
+      DropdownButtonFormField<String>(value: _gender, decoration: const InputDecoration(labelText: 'Gender', border: OutlineInputBorder()), items: const [DropdownMenuItem(value:'male',child:Text('Male')),DropdownMenuItem(value:'female',child:Text('Female')),DropdownMenuItem(value:'other',child:Text('Other')),DropdownMenuItem(value:'prefer_not_to_say',child:Text('Prefer not to say'))], onChanged: _saving ? null : (v) => setState(() => _gender = v ?? 'prefer_not_to_say')),
+      const SizedBox(height: 12), _field('address','Address'), _field('emergencyContactName','Emergency contact name', required: false), _field('emergencyContactPhone','Emergency contact phone', required: false),
+      if (_role == 'student') ...[_field('currentClass','Class'),_field('guardianName','Guardian name'),_field('guardianPhone','Guardian phone'),_field('previousSchool','Previous school',required:false)],
+      if (_role == 'teacher') ...[_field('qualification','Qualification'),_field('subjects','Subjects'),_field('experienceYears','Experience years (0–60)',keyboard:TextInputType.number)],
+      if (_role == 'parent') ...[_field('childAdmissionNo','Child Admission Number'),_field('relationshipToStudent','Relationship to student'),_field('occupation','Occupation',required:false)],
+      const SizedBox(height: 8), FilledButton.icon(onPressed: _saving ? null : _create, icon: _saving ? const SizedBox(width:18,height:18,child:CircularProgressIndicator(strokeWidth:2)) : const Icon(Icons.person_add), label: Text(_saving ? 'Creating account…' : 'Create active account')),
+    ])))),
+  );
 }
 
 class StudentsManagementScreen extends StatefulWidget {

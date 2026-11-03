@@ -134,7 +134,7 @@ const Map<String, List<_FieldSpec>> _schemas = {
     _FieldSpec('status', 'Status (active/inactive)', required: false),
   ],
   'teacherAttendance': [
-    _FieldSpec('teacherUid', 'Teacher Firebase UID'),
+    _FieldSpec('teacherUid', 'Teacher Firebase UID (auto-filled)', required: false),
     _FieldSpec('teacherId', 'Teacher ID'),
     _FieldSpec('teacherName', 'Teacher name'),
     _FieldSpec('date', 'Date (YYYY-MM-DD)'),
@@ -144,7 +144,7 @@ const Map<String, List<_FieldSpec>> _schemas = {
     _FieldSpec('notes', 'Notes', required: false),
   ],
   'teacherPayroll': [
-    _FieldSpec('teacherUid', 'Teacher Firebase UID'),
+    _FieldSpec('teacherUid', 'Teacher Firebase UID (auto-filled)', required: false),
     _FieldSpec('teacherId', 'Teacher ID'),
     _FieldSpec('teacherName', 'Teacher name'),
     _FieldSpec('month', 'Salary month (YYYY-MM)'),
@@ -202,7 +202,7 @@ const Map<String, List<_FieldSpec>> _schemas = {
     _FieldSpec('studentId', 'Student document ID'),
     _FieldSpec('studentName', 'Student name'),
     _FieldSpec('examId', 'Exam document ID'),
-    _FieldSpec('teacherId', 'Teacher ID', required: false),
+    _FieldSpec('teacherId', 'Teacher ID'),
     _FieldSpec('subject', 'Subject'),
     _FieldSpec('marksObtained', 'Marks obtained', numeric: true),
     _FieldSpec('totalMarks', 'Total marks', numeric: true),
@@ -211,7 +211,7 @@ const Map<String, List<_FieldSpec>> _schemas = {
   'assignments': [
     _FieldSpec('title', 'Assignment title'),
     _FieldSpec('className', 'Class'),
-    _FieldSpec('teacherId', 'Teacher ID', required: false),
+    _FieldSpec('teacherId', 'Teacher ID'),
     _FieldSpec('subject', 'Subject'),
     _FieldSpec('description', 'Description', required: false),
     _FieldSpec('dueDate', 'Due date (YYYY-MM-DD)', required: false),
@@ -397,6 +397,22 @@ class _AdminCollectionScreenState extends State<AdminCollectionScreen> {
               }
 
               try {
+                // Resolve the canonical teacher record instead of trusting a manually
+                // typed Firebase UID. This keeps staff attendance/payroll and
+                // assignment ownership fields consistent with issued Teacher IDs.
+                if (['teacherAttendance', 'teacherPayroll', 'assignments'].contains(widget.collectionName)) {
+                  final teacherId = (data['teacherId'] ?? '').toString().trim();
+                  if (teacherId.isEmpty) throw StateError('Enter the issued Teacher ID.');
+                  final matches = await FirebaseFirestore.instance.collection('teachers')
+                      .where('teacherId', isEqualTo: teacherId).limit(2).get();
+                  if (matches.docs.length != 1 || matches.docs.first.data()['status'] == 'inactive') {
+                    throw StateError('Teacher ID must match exactly one active teacher.');
+                  }
+                  final teacher = matches.docs.first;
+                  data['teacherUid'] = teacher.id;
+                  data['teacherId'] = teacherId;
+                  data['teacherName'] = (teacher.data()['name'] ?? '').toString();
+                }
                 if (existing == null) {
                   data['createdAt'] = FieldValue.serverTimestamp();
                   data['createdBy'] = user.uid;
