@@ -29,86 +29,6 @@
       ]
     },
     {
-      "collectionGroup": "assignments",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {
-          "fieldPath": "className",
-          "order": "ASCENDING"
-        }
-      ]
-    },
-    {
-      "collectionGroup": "assignments",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {
-          "fieldPath": "teacherId",
-          "order": "ASCENDING"
-        }
-      ]
-    },
-    {
-      "collectionGroup": "timetables",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {
-          "fieldPath": "className",
-          "order": "ASCENDING"
-        }
-      ]
-    },
-    {
-      "collectionGroup": "timetables",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {
-          "fieldPath": "teacherId",
-          "order": "ASCENDING"
-        }
-      ]
-    },
-    {
-      "collectionGroup": "exams",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {
-          "fieldPath": "className",
-          "order": "ASCENDING"
-        }
-      ]
-    },
-    {
-      "collectionGroup": "exams",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {
-          "fieldPath": "teacherId",
-          "order": "ASCENDING"
-        }
-      ]
-    },
-    {
-      "collectionGroup": "subjects",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {
-          "fieldPath": "className",
-          "order": "ASCENDING"
-        }
-      ]
-    },
-    {
-      "collectionGroup": "subjects",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {
-          "fieldPath": "teacherId",
-          "order": "ASCENDING"
-        }
-      ]
-    },
-    {
       "collectionGroup": "homeworkSubmissions",
       "queryScope": "COLLECTION",
       "fields": [
@@ -118,26 +38,6 @@
         },
         {
           "fieldPath": "assignmentId",
-          "order": "ASCENDING"
-        }
-      ]
-    },
-    {
-      "collectionGroup": "results",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {
-          "fieldPath": "teacherId",
-          "order": "ASCENDING"
-        }
-      ]
-    },
-    {
-      "collectionGroup": "homeworkSubmissions",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {
-          "fieldPath": "teacherId",
           "order": "ASCENDING"
         }
       ]
